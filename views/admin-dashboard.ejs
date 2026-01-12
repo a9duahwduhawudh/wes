@@ -727,6 +727,7 @@
           <% scripts.forEach(function(script) { %>
             <form method="post"
                   action="/admin/scripts/<%= script.id %>"
+                  enctype="multipart/form-data"
                   class="admin-script-row">
               <div class="row-main">
                 <div class="row-title">
@@ -776,6 +777,18 @@
                     Script File
                     <input type="text" name="scriptFile" value="<%= script.scriptFile %>" />
                   </label>
+
+                  <!-- Upload / paste body script (publish ke API loader) -->
+                  <label>
+                    Upload Script (.lua / .txt)
+                    <input type="file" name="scriptUpload" accept=".lua,.txt" />
+                  </label>
+                  <label>
+                    Script Body (opsional)
+                    <textarea name="scriptBody"
+                              rows="4"
+                              placeholder="Paste Lua script di sini (jika diisi, akan diprioritaskan daripada file upload)"></textarea>
+                  </label>
                 </div>
               </div>
               <div class="row-actions">
@@ -787,7 +800,126 @@
       </div>
     </section>
 
-    <!-- ADD NEW SCRIPT -->
+    <!-- PRIVATE RAW FILES (HANYA ADMIN, TIDAK DIPUBLISH KE WEB/API) -->
+    <section class="admin-section">
+      <div class="card">
+        <header class="card-header">
+          <div>
+            <h2 class="admin-subtitle">Private Raw Files</h2>
+            <p class="card-description">
+              File Lua/txt pribadi yang tidak dipublish ke website atau endpoint API.
+              Hanya terlihat di panel admin (bisa upload, edit, dan delete).
+            </p>
+          </div>
+        </header>
+
+        <% var rawFilesSafe = (typeof rawFiles !== 'undefined' && rawFiles) ? rawFiles : []; %>
+
+        <div class="admin-table">
+          <% if (rawFilesSafe.length) { %>
+            <% rawFilesSafe.forEach(function(file) { %>
+              <form method="post"
+                    action="/admin/raw-files/<%= file.id %>"
+                    enctype="multipart/form-data"
+                    class="admin-script-row">
+                <div class="row-main">
+                  <div class="row-title">
+                    <strong><%= file.id %></strong>
+                    <% if (file.name) { %>
+                      <span class="row-subtitle"><%= file.name %></span>
+                    <% } %>
+                  </div>
+                  <div class="row-subtitle small">
+                    Last update: <%= file.updatedAt || '-' %>
+                  </div>
+
+                  <div class="row-cols">
+                    <label>
+                      Name / Label
+                      <input type="text" name="name" value="<%= file.name || '' %>" />
+                    </label>
+                    <label>
+                      Note (internal)
+                      <input type="text" name="note" value="<%= file.note || '' %>" />
+                    </label>
+                    <label>
+                      Upload (.lua / .txt)
+                      <input type="file" name="rawUpload" accept=".lua,.txt" />
+                    </label>
+                    <label>
+                      File Body
+                      <textarea name="body"
+                                rows="5"
+                                placeholder="Isi file (jika diisi, akan menimpa isi lama)"><%= file.preview || '' %></textarea>
+                    </label>
+                  </div>
+                </div>
+                <div class="row-actions">
+                  <button class="btn-primary btn-small" type="submit">Save</button>
+                  <form method="post"
+                        action="/admin/raw-files/<%= file.id %>/delete"
+                        onsubmit="return confirm('Yakin hapus private file ini?');"
+                        class="inline-delete-form">
+                    <button class="btn-ghost btn-small" type="submit">Delete</button>
+                  </form>
+                </div>
+              </form>
+            <% }) %>
+          <% } else { %>
+            <p class="empty-state small" style="padding: 12px 0 4px;">
+              Belum ada private raw file yang tersimpan.
+            </p>
+          <% } %>
+        </div>
+      </div>
+    </section>
+
+    <!-- ADD NEW PRIVATE RAW FILE -->
+    <section class="admin-section">
+      <div class="card">
+        <header class="card-header">
+          <div>
+            <h2 class="admin-subtitle">Add private raw file</h2>
+            <p class="card-description">
+              Simpan file Lua/txt pribadi yang hanya bisa dilihat di panel admin.
+            </p>
+          </div>
+        </header>
+
+        <form method="post"
+              action="/admin/raw-files"
+              enctype="multipart/form-data"
+              class="admin-form add-form">
+          <div class="row-cols">
+            <label>
+              ID (slug unik)
+              <input type="text" name="id" placeholder="indo-ocean-dev-raw" required />
+            </label>
+            <label>
+              Name / Label
+              <input type="text" name="name" placeholder="Indo Ocean Dev Tab" />
+            </label>
+            <label>
+              Note (internal)
+              <input type="text" name="note" placeholder="catatan singkat / versi / tujuan" />
+            </label>
+            <label>
+              Upload (.lua / .txt)
+              <input type="file" name="rawUpload" accept=".lua,.txt" />
+            </label>
+            <label>
+              File Body (opsional)
+              <textarea name="body"
+                        rows="5"
+                        placeholder="Paste isi Lua/txt di sini (jika diisi, akan diprioritaskan daripada file upload)"></textarea>
+            </label>
+          </div>
+          <button class="btn-outline full" type="submit">Save Private File</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- ADD NEW SCRIPT (PUBLISHED VIA LOADER API) -->
     <section class="admin-section">
       <div class="card">
         <header class="card-header">
@@ -801,6 +933,7 @@
 
         <form method="post"
               action="/admin/scripts"
+              enctype="multipart/form-data"
               class="admin-form add-form">
           <div class="row-cols">
             <label>
@@ -845,6 +978,16 @@
             <label>
               Script File
               <input type="text" name="scriptFile" placeholder="spear_fishing.lua" />
+            </label>
+            <label>
+              Upload Script (.lua / .txt)
+              <input type="file" name="scriptUpload" accept=".lua,.txt" />
+            </label>
+            <label>
+              Script Body (opsional)
+              <textarea name="scriptBody"
+                        rows="4"
+                        placeholder="Paste Lua script di sini (jika diisi, akan diprioritaskan daripada file upload)"></textarea>
             </label>
           </div>
           <button class="btn-outline full" type="submit">Add Script</button>
