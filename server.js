@@ -6,9 +6,19 @@ const fs = require('fs');
 const express = require('express');
 const bodyParser = require('body-parser');
 const cookieSession = require('cookie-session');
+const multer = require('multer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// ===== Multer untuk upload script (file .lua / .txt) =================
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 2 * 1024 * 1024 // 2 MB
+  }
+});
 
 // ===== Upstash / KV config =========================================
 
@@ -81,7 +91,7 @@ async function kvGetInt(key) {
  * Sinkronisasi uses/users manual dari Admin ke KV.
  */
 async function syncScriptCountersToKV(script) {
-  if (!hasKV) return;
+  if (!hasKV || !script || !script.id) return;
   const baseKey = `exhub:script:${script.id}`;
   try {
     await Promise.all([
@@ -100,11 +110,23 @@ const REDEEMED_PATH = path.join(__dirname, 'config', 'redeemed-keys.json');
 // file untuk menyimpan data tracking eksekusi user (fallback lokal)
 const EXEC_USERS_PATH = path.join(__dirname, 'config', 'exec-users.json');
 
-// KV keys untuk data terstruktur
+// file untuk meta Private Raw Files
+const RAW_FILES_PATH = path.join(__dirname, 'config', 'raw-files.json');
+
+// direktori & KV key untuk body script (raw Lua/txt)
+const SCRIPTS_RAW_DIR = path.join(__dirname, 'scripts-raw');
+// direktori untuk private raw files (hanya admin)
+const RAW_FILES_DIR = path.join(__dirname, 'raw-files');
+
 const KV_SCRIPTS_META_KEY = 'exhub:scripts-meta';
 const KV_REDEEMED_KEY = 'exhub:redeemed-keys';
 // key KV untuk data tracking eksekusi user
 const KV_EXEC_USERS_KEY = 'exhub:exec-users';
+// prefix KV untuk body script
+const KV_SCRIPT_BODY_PREFIX = 'exhub:script-body:';
+// key/prefix KV untuk Private Raw Files
+const KV_RAW_FILES_META_KEY = 'exhub:raw-files-meta';
+const KV_RAW_FILE_BODY_PREFIX = 'exhub:raw-file-body:';
 
 // ---- helper file lokal (fallback) ---------------------------------
 
@@ -180,6 +202,61 @@ function saveExecUsersToFile(list) {
     fs.writeFileSync(EXEC_USERS_PATH, JSON.stringify(list, null, 2), 'utf8');
   } catch (err) {
     console.error('Failed to save exec-users.json (file):', err);
+  }
+}
+
+// file helper untuk Private Raw Files meta
+
+function loadRawFilesFromFile() {
+  try {
+    if (!fs.existsSync(RAW_FILES_PATH)) return [];
+    const raw = fs.readFileSync(RAW_FILES_PATH, 'utf8');
+    if (!raw.trim()) return [];
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error('Failed to load raw-files.json (file):', err);
+    return [];
+  }
+}
+
+function saveRawFilesToFile(files) {
+  try {
+    const dir = path.dirname(RAW_FILES_PATH);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(RAW_FILES_PATH, JSON.stringify(files, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Failed to save raw-files.json (file):', err);
+  }
+}
+
+// helper untuk nama file safe (hindari karakter aneh)
+function safeScriptFileName(scriptId) {
+  return String(scriptId).replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+function safeRawFileName(rawId) {
+  return String(rawId).replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+function ensureScriptsRawDir() {
+  try {
+    if (!fs.existsSync(SCRIPTS_RAW_DIR)) {
+      fs.mkdirSync(SCRIPTS_RAW_DIR, { recursive: true });
+    }
+  } catch (err) {
+    console.error('Failed to ensure scripts-raw dir:', err);
+  }
+}
+
+function ensureRawFilesDir() {
+  try {
+    if (!fs.existsSync(RAW_FILES_DIR)) {
+      fs.mkdirSync(RAW_FILES_DIR, { recursive: true });
+    }
+  } catch (err) {
+    console.error('Failed to ensure raw-files dir:', err);
   }
 }
 
@@ -283,6 +360,287 @@ async function saveExecUsers(list) {
     }
   }
   saveExecUsersToFile(list);
+}
+
+// helper utama untuk Private Raw Files (meta)
+
+async function loadRawFiles() {
+  if (hasKV) {
+    const raw = await kvGet(KV_RAW_FILES_META_KEY);
+    if (raw && typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      } catch (e) {
+        console.error('Failed to parse raw files from KV:', e);
+      }
+    }
+    // Seed dari file kalau KV belum punya
+    const seeded = loadRawFilesFromFile();
+    try {
+      await kvSet(KV_RAW_FILES_META_KEY, JSON.stringify(seeded));
+    } catch (e) {
+      console.error('Failed to seed raw files to KV:', e);
+    }
+    return seeded;
+  }
+  return loadRawFilesFromFile();
+}
+
+async function saveRawFiles(files) {
+  const json = JSON.stringify(files);
+  if (hasKV) {
+    try {
+      await kvSet(KV_RAW_FILES_META_KEY, json);
+    } catch (e) {
+      console.error('Failed to save raw files to KV:', e);
+    }
+  }
+  saveRawFilesToFile(files);
+}
+
+// ---- helper body script (raw) -------------------------------------
+
+/**
+ * Ambil body script:
+ * 1) Dari KV (exhub:script-body:<id>)
+ * 2) Fallback file dev lokal (scripts-raw/<id>.lua)
+ * 3) Fallback legacy file di /scripts sesuai scriptFile
+ */
+async function loadScriptBody(script) {
+  if (!script || !script.id) return null;
+
+  // 1) KV
+  if (hasKV) {
+    try {
+      const kvKey = KV_SCRIPT_BODY_PREFIX + String(script.id);
+      const raw = await kvGet(kvKey);
+      if (raw && typeof raw === 'string' && raw.trim() !== '') {
+        return raw;
+      }
+    } catch (err) {
+      console.error('Failed to load script body from KV:', err);
+    }
+  }
+
+  // 2) File lokal /scripts-raw
+  try {
+    ensureScriptsRawDir();
+    const fileName = safeScriptFileName(script.id) + '.lua';
+    const localPath = path.join(SCRIPTS_RAW_DIR, fileName);
+    if (fs.existsSync(localPath)) {
+      return fs.readFileSync(localPath, 'utf8');
+    }
+  } catch (err) {
+    console.error('Failed to load script body from local file:', err);
+  }
+
+  // 3) Legacy file di /scripts
+  try {
+    if (script.scriptFile) {
+      const legacyPath = path.join(__dirname, 'scripts', script.scriptFile);
+      if (fs.existsSync(legacyPath)) {
+        return fs.readFileSync(legacyPath, 'utf8');
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load script body from legacy path:', err);
+  }
+
+  return null;
+}
+
+/**
+ * Simpan body script:
+ * - Simpan di KV (utama, untuk production)
+ * - Best-effort simpan juga di /scripts-raw (dev lokal)
+ */
+async function saveScriptBody(scriptId, body) {
+  if (!scriptId) return;
+  const strBody = String(body ?? '');
+
+  // 1) KV
+  if (hasKV) {
+    try {
+      const kvKey = KV_SCRIPT_BODY_PREFIX + String(scriptId);
+      await kvSet(kvKey, strBody);
+    } catch (err) {
+      console.error('Failed to save script body to KV:', err);
+    }
+  }
+
+  // 2) File lokal (dev only)
+  try {
+    ensureScriptsRawDir();
+    const fileName = safeScriptFileName(scriptId) + '.lua';
+    const localPath = path.join(SCRIPTS_RAW_DIR, fileName);
+    fs.writeFileSync(localPath, strBody, 'utf8');
+  } catch (err) {
+    console.error('Failed to save script body to local file:', err);
+  }
+}
+
+/**
+ * Hapus body script (untuk Delete Script).
+ * KV di-blank, file lokal dihapus jika ada.
+ */
+async function deleteScriptBody(scriptId) {
+  if (!scriptId) return;
+
+  // KV: set jadi string kosong supaya loadScriptBody menganggap tidak ada
+  if (hasKV) {
+    try {
+      const kvKey = KV_SCRIPT_BODY_PREFIX + String(scriptId);
+      await kvSet(kvKey, '');
+    } catch (err) {
+      console.error('Failed to clear script body in KV:', err);
+    }
+  }
+
+  // File lokal: hapus scripts-raw/<id>.lua jika ada
+  try {
+    ensureScriptsRawDir();
+    const fileName = safeScriptFileName(scriptId) + '.lua';
+    const localPath = path.join(SCRIPTS_RAW_DIR, fileName);
+    if (fs.existsSync(localPath)) {
+      fs.unlinkSync(localPath);
+    }
+  } catch (err) {
+    console.error('Failed to delete script body local file:', err);
+  }
+}
+
+// ---- helper body untuk Private Raw Files --------------------------
+
+/**
+ * Ambil body private raw file:
+ * 1) Dari KV (exhub:raw-file-body:<id>)
+ * 2) Fallback file lokal (raw-files/<slug>.lua atau .txt)
+ */
+async function loadRawFileBody(rawId) {
+  if (!rawId) return null;
+
+  // 1) KV
+  if (hasKV) {
+    try {
+      const kvKey = KV_RAW_FILE_BODY_PREFIX + String(rawId);
+      const raw = await kvGet(kvKey);
+      if (raw && typeof raw === 'string' && raw.trim() !== '') {
+        return raw;
+      }
+    } catch (err) {
+      console.error('Failed to load raw file body from KV:', err);
+    }
+  }
+
+  // 2) File lokal
+  try {
+    ensureRawFilesDir();
+    const base = safeRawFileName(rawId);
+    const luaPath = path.join(RAW_FILES_DIR, base + '.lua');
+    const txtPath = path.join(RAW_FILES_DIR, base + '.txt');
+
+    let localPath = null;
+    if (fs.existsSync(luaPath)) {
+      localPath = luaPath;
+    } else if (fs.existsSync(txtPath)) {
+      localPath = txtPath;
+    }
+
+    if (localPath) {
+      return fs.readFileSync(localPath, 'utf8');
+    }
+  } catch (err) {
+    console.error('Failed to load raw file body from local file:', err);
+  }
+
+  return null;
+}
+
+/**
+ * Simpan body private raw file (KV + lokal).
+ */
+async function saveRawFileBody(rawId, body) {
+  if (!rawId) return;
+  const strBody = String(body ?? '');
+
+  // KV
+  if (hasKV) {
+    try {
+      const kvKey = KV_RAW_FILE_BODY_PREFIX + String(rawId);
+      await kvSet(kvKey, strBody);
+    } catch (err) {
+      console.error('Failed to save raw file body to KV:', err);
+    }
+  }
+
+  // Lokal
+  try {
+    ensureRawFilesDir();
+    const fileName = safeRawFileName(rawId) + '.lua';
+    const localPath = path.join(RAW_FILES_DIR, fileName);
+    fs.writeFileSync(localPath, strBody, 'utf8');
+  } catch (err) {
+    console.error('Failed to save raw file body to local file:', err);
+  }
+}
+
+/**
+ * Hapus body private raw file (KV + lokal).
+ */
+async function deleteRawFileBody(rawId) {
+  if (!rawId) return;
+
+  // KV: di-blank
+  if (hasKV) {
+    try {
+      const kvKey = KV_RAW_FILE_BODY_PREFIX + String(rawId);
+      await kvSet(kvKey, '');
+    } catch (err) {
+      console.error('Failed to clear raw file body in KV:', err);
+    }
+  }
+
+  // Lokal: hapus .lua dan .txt jika ada
+  try {
+    ensureRawFilesDir();
+    const base = safeRawFileName(rawId);
+    const luaPath = path.join(RAW_FILES_DIR, base + '.lua');
+    const txtPath = path.join(RAW_FILES_DIR, base + '.txt');
+    if (fs.existsSync(luaPath)) fs.unlinkSync(luaPath);
+    if (fs.existsSync(txtPath)) fs.unlinkSync(txtPath);
+  } catch (err) {
+    console.error('Failed to delete raw file body local file:', err);
+  }
+}
+
+/**
+ * Load rawFiles + isi preview (untuk admin-dashboard).
+ */
+async function loadRawFilesForAdmin() {
+  const list = await loadRawFiles();
+  const result = [];
+  for (const f of list) {
+    const file = { ...f };
+    try {
+      const body = await loadRawFileBody(file.id);
+      if (body != null) {
+        const maxLen = 500;
+        file.preview =
+          body.length > maxLen ? body.slice(0, maxLen) + '\n…' : body;
+      } else {
+        file.preview = '';
+      }
+    } catch (err) {
+      console.error('Failed to build preview for raw file:', err);
+      file.preview = '';
+    }
+    if (!file.updatedAt) {
+      file.updatedAt = '';
+    }
+    result.push(file);
+  }
+  return result;
 }
 
 // ---- stats helpers ------------------------------------------------
@@ -551,7 +909,7 @@ async function hydrateScriptsWithKV(scripts) {
  * Tambah counter uses dan users unik (IP-based) di KV ketika loader dipanggil.
  */
 async function incrementCountersKV(script, req) {
-  if (!hasKV) return;
+  if (!hasKV || !script || !script.id) return;
 
   const baseKey = `exhub:script:${script.id}`;
   const usesKey = `${baseKey}:uses`;
@@ -703,6 +1061,15 @@ app.get('/api/script/:id', async (req, res) => {
     });
   }
 
+  // Jika status "down" → paksa mati (maintenance / disable)
+  if (script.status === 'down') {
+    return res.status(503).render('api-404', {
+      scriptId: script.id,
+      loaderSnippet,
+      reason: 'down'
+    });
+  }
+
   const expectedKey = process.env.LOADER_KEY;
   const loaderKey = req.headers['x-loader-key'];
 
@@ -720,12 +1087,11 @@ app.get('/api/script/:id', async (req, res) => {
     });
   }
 
-  const filePath = path.join(__dirname, 'scripts', script.scriptFile);
-
-  fs.readFile(filePath, 'utf8', async (err, content) => {
-    if (err) {
-      console.error(err);
-      return res.status(500).send('Server error.');
+  try {
+    const content = await loadScriptBody(script);
+    if (!content) {
+      console.error('Script body not found for id:', script.id);
+      return res.status(500).send('Server error (script body missing).');
     }
 
     // update meta uses (untuk dev lokal)
@@ -741,7 +1107,10 @@ app.get('/api/script/:id', async (req, res) => {
 
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     return res.send(content);
-  });
+  } catch (err) {
+    console.error('Failed to serve /api/script:', err);
+    return res.status(500).send('Server error.');
+  }
 });
 
 // ===================================================================
@@ -765,7 +1134,10 @@ app.post('/api/exec', async (req, res) => {
       key,
       Key,
       createdAt,
-      expiresAt
+      expiresAt,
+      mapName,
+      placeId,
+      serverId
     } = req.body || {};
 
     if (!scriptId || !userId || !hwid) {
@@ -827,7 +1199,10 @@ app.post('/api/exec', async (req, res) => {
         firstExecuteAt: now,
         lastExecuteAt: now,
         lastIp: ip,
-        totalExecutes: 1
+        totalExecutes: 1,
+        mapName: mapName || null,
+        placeId: placeId || null,
+        serverId: serverId || null
       };
       execUsers.push(entry);
     } else {
@@ -857,6 +1232,16 @@ app.post('/api/exec', async (req, res) => {
       if (expiresAtStr) {
         entry.keyExpiresAt = expiresAtStr;
       }
+
+      if (mapName) {
+        entry.mapName = mapName;
+      }
+      if (placeId) {
+        entry.placeId = placeId;
+      }
+      if (serverId) {
+        entry.serverId = serverId;
+      }
     }
 
     await saveExecUsers(execUsers);
@@ -873,7 +1258,10 @@ app.post('/api/exec', async (req, res) => {
         executeCount: execCountNum,
         key: keyToken,
         createdAt: createdAtStr,
-        expiresAt: expiresAtStr
+        expiresAt: expiresAtStr,
+        mapName,
+        placeId,
+        serverId
       }
     });
   } catch (err) {
@@ -957,12 +1345,14 @@ app.get('/admin', requireAdmin, async (req, res) => {
   try {
     const period = req.query.period || '24h';
     const { stats, scripts } = await buildAdminStats(period);
+    const rawFiles = await loadRawFilesForAdmin();
 
     res.render('admin-dashboard', {
       scripts,
       stats,
       keyCheck: null,
-      userSearch: null
+      userSearch: null,
+      rawFiles
     });
   } catch (err) {
     console.error('Error rendering /admin dashboard:', err);
@@ -977,6 +1367,7 @@ app.get('/admin/key-check', requireAdmin, async (req, res) => {
     const rawQ = (req.query.q || '').trim();
 
     const { stats, scripts } = await buildAdminStats(period);
+    const rawFiles = await loadRawFilesForAdmin();
 
     let keyCheck = null;
 
@@ -1020,7 +1411,8 @@ app.get('/admin/key-check', requireAdmin, async (req, res) => {
       scripts,
       stats,
       keyCheck,
-      userSearch: null
+      userSearch: null,
+      rawFiles
     });
   } catch (err) {
     console.error('Error rendering /admin/key-check:', err);
@@ -1035,6 +1427,7 @@ app.get('/admin/search/user', requireAdmin, async (req, res) => {
 
   try {
     const { stats, scripts } = await buildAdminStats(period);
+    const rawFiles = await loadRawFilesForAdmin();
 
     const userSearch = {
       query: q,
@@ -1048,7 +1441,8 @@ app.get('/admin/search/user', requireAdmin, async (req, res) => {
         scripts,
         stats,
         keyCheck: null,
-        userSearch
+        userSearch,
+        rawFiles
       });
     }
 
@@ -1165,15 +1559,16 @@ app.get('/admin/search/user', requireAdmin, async (req, res) => {
       scripts,
       stats,
       keyCheck: null,
-      userSearch
+      userSearch,
+      rawFiles
     });
   } catch (err) {
     console.error('Error in /admin/search/user:', err);
     // Kalau gagal total, set error umum
-    const { stats, scripts } = await buildAdminStats('24h').catch(() => ({
-      stats: { period: '24h' },
-      scripts: []
-    }));
+    const fallback = await buildAdminStats('24h').catch(() => null);
+    const stats = fallback ? fallback.stats : { period: '24h' };
+    const scripts = fallback ? fallback.scripts : [];
+    const rawFiles = await loadRawFilesForAdmin().catch(() => []);
     const userSearch = {
       query: q,
       result: null,
@@ -1183,7 +1578,8 @@ app.get('/admin/search/user', requireAdmin, async (req, res) => {
       scripts,
       stats,
       keyCheck: null,
-      userSearch
+      userSearch,
+      rawFiles
     });
   }
 });
@@ -1214,68 +1610,280 @@ app.post('/admin/exec-users/delete', requireAdmin, async (req, res) => {
   }
 });
 
-// Update script
-app.post('/admin/scripts/:id', requireAdmin, async (req, res) => {
-  const scripts = await loadScripts();
-  const idx = scripts.findIndex((s) => s.id === req.params.id);
-  if (idx === -1) return res.redirect('/admin');
+// Update script (metadata + optional upload body + Delete Script)
+app.post(
+  '/admin/scripts/:id',
+  requireAdmin,
+  upload.single('scriptUpload'),
+  async (req, res) => {
+    const action = req.body._action || 'save';
+    const scripts = await loadScripts();
+    const idx = scripts.findIndex((s) => s.id === req.params.id);
 
-  const s = scripts[idx];
+    if (idx === -1) {
+      return res.redirect('/admin');
+    }
 
-  s.name = req.body.name || s.name;
-  s.gameName = req.body.gameName || s.gameName;
-  s.version = req.body.version || s.version;
-  s.status = req.body.status || s.status;
-  s.isFree = req.body.isFree === 'on';
-  s.uses = parseInt(req.body.uses || s.uses || 0, 10);
-  s.users = parseInt(req.body.users || s.users || 0, 10);
-  s.thumbnail = req.body.thumbnail || s.thumbnail;
-  s.scriptFile = req.body.scriptFile || s.scriptFile;
+    const s = scripts[idx];
 
-  await saveScripts(scripts);
+    // Aksi Delete Script
+    if (action === 'delete') {
+      // Safety: hanya boleh delete kalau status sudah "down"
+      if (s.status !== 'down') {
+        return res.redirect('/admin');
+      }
 
-  try {
-    await syncScriptCountersToKV(s);
-  } catch (e) {
-    console.error('syncScriptCountersToKV failed:', e);
+      const deletedId = s.id;
+      scripts.splice(idx, 1);
+
+      await saveScripts(scripts);
+
+      try {
+        await deleteScriptBody(deletedId);
+      } catch (err) {
+        console.error('Failed to delete script body (delete action):', err);
+      }
+
+      // Opsional: reset counter uses/users di KV
+      try {
+        await syncScriptCountersToKV({ id: deletedId, uses: 0, users: 0 });
+      } catch (err) {
+        console.error('Failed to reset counters after delete:', err);
+      }
+
+      return res.redirect('/admin');
+    }
+
+    // Aksi Save (default)
+    s.name = req.body.name || s.name;
+    s.gameName = req.body.gameName || s.gameName;
+    s.version = req.body.version || s.version;
+    s.status = req.body.status || s.status;
+    s.isFree = req.body.isFree === 'on';
+    s.uses = parseInt(req.body.uses || s.uses || 0, 10);
+    s.users = parseInt(req.body.users || s.users || 0, 10);
+    s.thumbnail = req.body.thumbnail || s.thumbnail;
+    s.scriptFile = req.body.scriptFile || s.scriptFile;
+
+    // Body script dari textarea / upload file
+    const scriptBodyText = (req.body.scriptBody || '').trim();
+    let uploadedBody = null;
+
+    if (req.file && req.file.buffer && req.file.size > 0) {
+      uploadedBody = req.file.buffer.toString('utf8');
+    }
+
+    // Prioritas: kalau textarea diisi, pakai itu; kalau kosong tapi ada file, pakai file
+    let finalBody = null;
+    if (uploadedBody) {
+      finalBody = uploadedBody;
+    }
+    if (scriptBodyText) {
+      finalBody = scriptBodyText;
+    }
+
+    if (finalBody != null) {
+      try {
+        await saveScriptBody(s.id, finalBody);
+      } catch (err) {
+        console.error('Failed to save script body (update):', err);
+      }
+    }
+
+    await saveScripts(scripts);
+
+    try {
+      await syncScriptCountersToKV(s);
+    } catch (e) {
+      console.error('syncScriptCountersToKV failed:', e);
+    }
+
+    res.redirect('/admin');
   }
+);
 
-  res.redirect('/admin');
-});
+// Tambah script baru (metadata + optional upload body)
+app.post(
+  '/admin/scripts',
+  requireAdmin,
+  upload.single('scriptUpload'),
+  async (req, res) => {
+    const scripts = await loadScripts();
+    const id = (req.body.id || '').trim();
 
-// Tambah script baru
-app.post('/admin/scripts', requireAdmin, async (req, res) => {
-  const scripts = await loadScripts();
-  const id = (req.body.id || '').trim();
+    if (!id || scripts.some((s) => s.id === id)) {
+      return res.redirect('/admin');
+    }
 
-  if (!id || scripts.some((s) => s.id === id)) {
-    return res.redirect('/admin');
+    const newScript = {
+      id,
+      name: req.body.name || id,
+      gameName: req.body.gameName || '',
+      version: req.body.version || 'v1.0.0',
+      isFree: req.body.isFree === 'on',
+      status: req.body.status || 'working',
+      uses: parseInt(req.body.uses || 0, 10),
+      users: parseInt(req.body.users || 0, 10),
+      thumbnail: req.body.thumbnail || '',
+      scriptFile: req.body.scriptFile || ''
+    };
+
+    scripts.push(newScript);
+    await saveScripts(scripts);
+
+    // Simpan body script kalau ada (textarea / upload)
+    const scriptBodyText = (req.body.scriptBody || '').trim();
+    let uploadedBody = null;
+    if (req.file && req.file.buffer && req.file.size > 0) {
+      uploadedBody = req.file.buffer.toString('utf8');
+    }
+
+    let finalBody = null;
+    if (uploadedBody) finalBody = uploadedBody;
+    if (scriptBodyText) finalBody = scriptBodyText;
+
+    if (finalBody != null) {
+      try {
+        await saveScriptBody(newScript.id, finalBody);
+      } catch (err) {
+        console.error('Failed to save script body (new):', err);
+      }
+    }
+
+    try {
+      await syncScriptCountersToKV(newScript);
+    } catch (e) {
+      console.error('syncScriptCountersToKV (new) failed:', e);
+    }
+
+    res.redirect('/admin');
   }
+);
 
-  const newScript = {
-    id,
-    name: req.body.name || id,
-    gameName: req.body.gameName || '',
-    version: req.body.version || 'v1.0.0',
-    isFree: req.body.isFree === 'on',
-    status: req.body.status || 'working',
-    uses: parseInt(req.body.uses || 0, 10),
-    users: parseInt(req.body.users || 0, 10),
-    thumbnail: req.body.thumbnail || '',
-    scriptFile: req.body.scriptFile || ''
-  };
+// ===================================================================
+// Admin Private Raw Files (hanya admin, tidak dipublish ke web/API)
+// ===================================================================
 
-  scripts.push(newScript);
-  await saveScripts(scripts);
+// Tambah Private Raw File baru
+app.post(
+  '/admin/raw-files',
+  requireAdmin,
+  upload.single('rawUpload'),
+  async (req, res) => {
+    try {
+      const rawFiles = await loadRawFiles();
+      const id = (req.body.id || '').trim();
 
-  try {
-    await syncScriptCountersToKV(newScript);
-  } catch (e) {
-    console.error('syncScriptCountersToKV (new) failed:', e);
+      if (!id || rawFiles.some((f) => f.id === id)) {
+        return res.redirect('/admin');
+      }
+
+      const now = new Date().toISOString();
+
+      const newFile = {
+        id,
+        name: (req.body.name || '').trim(),
+        note: (req.body.note || '').trim(),
+        updatedAt: now
+      };
+
+      rawFiles.push(newFile);
+      await saveRawFiles(rawFiles);
+
+      // Body dari textarea / upload
+      const bodyText = (req.body.body || '').trim();
+      let uploadedBody = null;
+      if (req.file && req.file.buffer && req.file.size > 0) {
+        uploadedBody = req.file.buffer.toString('utf8');
+      }
+
+      let finalBody = null;
+      if (uploadedBody) finalBody = uploadedBody;
+      if (bodyText) finalBody = bodyText;
+
+      if (finalBody != null) {
+        try {
+          await saveRawFileBody(newFile.id, finalBody);
+        } catch (err) {
+          console.error('Failed to save raw file body (new):', err);
+        }
+      }
+
+      return res.redirect('/admin');
+    } catch (err) {
+      console.error('Failed to handle /admin/raw-files (create):', err);
+      return res.redirect('/admin');
+    }
   }
+);
 
-  res.redirect('/admin');
-});
+// Update / Delete Private Raw File
+app.post(
+  '/admin/raw-files/:id',
+  requireAdmin,
+  upload.single('rawUpload'),
+  async (req, res) => {
+    try {
+      const action = req.body._action || 'save';
+      const id = req.params.id;
+
+      let rawFiles = await loadRawFiles();
+      const idx = rawFiles.findIndex((f) => f.id === id);
+
+      if (idx === -1) {
+        return res.redirect('/admin');
+      }
+
+      const file = rawFiles[idx];
+
+      if (action === 'delete') {
+        rawFiles.splice(idx, 1);
+        await saveRawFiles(rawFiles);
+
+        try {
+          await deleteRawFileBody(id);
+        } catch (err) {
+          console.error('Failed to delete raw file body (delete):', err);
+        }
+
+        return res.redirect('/admin');
+      }
+
+      // Aksi Save
+      const now = new Date().toISOString();
+
+      file.name = (req.body.name || '').trim();
+      file.note = (req.body.note || '').trim();
+      file.updatedAt = now;
+
+      await saveRawFiles(rawFiles);
+
+      // Body dari textarea / upload
+      const bodyText = (req.body.body || '').trim();
+      let uploadedBody = null;
+      if (req.file && req.file.buffer && req.file.size > 0) {
+        uploadedBody = req.file.buffer.toString('utf8');
+      }
+
+      let finalBody = null;
+      if (uploadedBody) finalBody = uploadedBody;
+      if (bodyText) finalBody = bodyText;
+
+      if (finalBody != null) {
+        try {
+          await saveRawFileBody(file.id, finalBody);
+        } catch (err) {
+          console.error('Failed to save raw file body (update):', err);
+        }
+      }
+
+      return res.redirect('/admin');
+    } catch (err) {
+      console.error('Failed to handle /admin/raw-files/:id:', err);
+      return res.redirect('/admin');
+    }
+  }
+);
 
 // ===================================================================
 // Admin API untuk melihat data exec-users
@@ -1322,10 +1930,12 @@ app.use(async (req, res) => {
 // Export untuk Vercel / listen untuk lokal
 // ===================================================================
 
-if (process.env.VERCEL) {
-  module.exports = app;
-} else {
+// Jika dijalankan langsung: `node server.js` (lokal)
+if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`ExHub site running on http://localhost:${PORT}`);
   });
 }
+
+// Selalu export app untuk Vercel
+module.exports = app;
