@@ -91,7 +91,7 @@ async function kvGetInt(key) {
  * Sinkronisasi uses/users manual dari Admin ke KV.
  */
 async function syncScriptCountersToKV(script) {
-  if (!hasKV || !script || !script.id) return;
+  if (!hasKV) return;
   const baseKey = `exhub:script:${script.id}`;
   try {
     await Promise.all([
@@ -110,23 +110,20 @@ const REDEEMED_PATH = path.join(__dirname, 'config', 'redeemed-keys.json');
 // file untuk menyimpan data tracking eksekusi user (fallback lokal)
 const EXEC_USERS_PATH = path.join(__dirname, 'config', 'exec-users.json');
 
-// file untuk meta Private Raw Files
-const RAW_FILES_PATH = path.join(__dirname, 'config', 'raw-files.json');
-
 // direktori & KV key untuk body script (raw Lua/txt)
 const SCRIPTS_RAW_DIR = path.join(__dirname, 'scripts-raw');
-// direktori untuk private raw files (hanya admin)
-const RAW_FILES_DIR = path.join(__dirname, 'raw-files');
-
 const KV_SCRIPTS_META_KEY = 'exhub:scripts-meta';
 const KV_REDEEMED_KEY = 'exhub:redeemed-keys';
 // key KV untuk data tracking eksekusi user
 const KV_EXEC_USERS_KEY = 'exhub:exec-users';
 // prefix KV untuk body script
 const KV_SCRIPT_BODY_PREFIX = 'exhub:script-body:';
-// key/prefix KV untuk Private Raw Files
+
+// file & dir untuk Private Raw Files
+const RAW_FILES_PATH = path.join(__dirname, 'config', 'raw-files.json');
+const RAW_FILES_DIR = path.join(__dirname, 'private-raw');
 const KV_RAW_FILES_META_KEY = 'exhub:raw-files-meta';
-const KV_RAW_FILE_BODY_PREFIX = 'exhub:raw-file-body:';
+const KV_RAW_BODY_PREFIX = 'exhub:raw-body:';
 
 // ---- helper file lokal (fallback) ---------------------------------
 
@@ -205,7 +202,7 @@ function saveExecUsersToFile(list) {
   }
 }
 
-// file helper untuk Private Raw Files meta
+// file helper untuk raw-files meta
 
 function loadRawFilesFromFile() {
   try {
@@ -219,13 +216,13 @@ function loadRawFilesFromFile() {
   }
 }
 
-function saveRawFilesToFile(files) {
+function saveRawFilesToFile(list) {
   try {
     const dir = path.dirname(RAW_FILES_PATH);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    fs.writeFileSync(RAW_FILES_PATH, JSON.stringify(files, null, 2), 'utf8');
+    fs.writeFileSync(RAW_FILES_PATH, JSON.stringify(list, null, 2), 'utf8');
   } catch (err) {
     console.error('Failed to save raw-files.json (file):', err);
   }
@@ -234,10 +231,6 @@ function saveRawFilesToFile(files) {
 // helper untuk nama file safe (hindari karakter aneh)
 function safeScriptFileName(scriptId) {
   return String(scriptId).replace(/[^a-zA-Z0-9._-]/g, '_');
-}
-
-function safeRawFileName(rawId) {
-  return String(rawId).replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
 function ensureScriptsRawDir() {
@@ -256,7 +249,7 @@ function ensureRawFilesDir() {
       fs.mkdirSync(RAW_FILES_DIR, { recursive: true });
     }
   } catch (err) {
-    console.error('Failed to ensure raw-files dir:', err);
+    console.error('Failed to ensure private-raw dir:', err);
   }
 }
 
@@ -362,7 +355,7 @@ async function saveExecUsers(list) {
   saveExecUsersToFile(list);
 }
 
-// helper utama untuk Private Raw Files (meta)
+// helper utama untuk raw-files meta
 
 async function loadRawFiles() {
   if (hasKV) {
@@ -375,7 +368,7 @@ async function loadRawFiles() {
         console.error('Failed to parse raw files from KV:', e);
       }
     }
-    // Seed dari file kalau KV belum punya
+    // seed dari file kalau KV belum punya data
     const seeded = loadRawFilesFromFile();
     try {
       await kvSet(KV_RAW_FILES_META_KEY, JSON.stringify(seeded));
@@ -387,8 +380,8 @@ async function loadRawFiles() {
   return loadRawFilesFromFile();
 }
 
-async function saveRawFiles(files) {
-  const json = JSON.stringify(files);
+async function saveRawFiles(list) {
+  const json = JSON.stringify(list);
   if (hasKV) {
     try {
       await kvSet(KV_RAW_FILES_META_KEY, json);
@@ -396,7 +389,7 @@ async function saveRawFiles(files) {
       console.error('Failed to save raw files to KV:', e);
     }
   }
-  saveRawFilesToFile(files);
+  saveRawFilesToFile(list);
 }
 
 // ---- helper body script (raw) -------------------------------------
@@ -480,167 +473,93 @@ async function saveScriptBody(scriptId, body) {
   }
 }
 
-/**
- * Hapus body script (untuk Delete Script).
- * KV di-blank, file lokal dihapus jika ada.
- */
-async function deleteScriptBody(scriptId) {
-  if (!scriptId) return;
-
-  // KV: set jadi string kosong supaya loadScriptBody menganggap tidak ada
-  if (hasKV) {
-    try {
-      const kvKey = KV_SCRIPT_BODY_PREFIX + String(scriptId);
-      await kvSet(kvKey, '');
-    } catch (err) {
-      console.error('Failed to clear script body in KV:', err);
-    }
-  }
-
-  // File lokal: hapus scripts-raw/<id>.lua jika ada
-  try {
-    ensureScriptsRawDir();
-    const fileName = safeScriptFileName(scriptId) + '.lua';
-    const localPath = path.join(SCRIPTS_RAW_DIR, fileName);
-    if (fs.existsSync(localPath)) {
-      fs.unlinkSync(localPath);
-    }
-  } catch (err) {
-    console.error('Failed to delete script body local file:', err);
-  }
-}
-
 // ---- helper body untuk Private Raw Files --------------------------
 
-/**
- * Ambil body private raw file:
- * 1) Dari KV (exhub:raw-file-body:<id>)
- * 2) Fallback file lokal (raw-files/<slug>.lua atau .txt)
- */
-async function loadRawFileBody(rawId) {
+async function loadRawBody(rawId) {
   if (!rawId) return null;
 
   // 1) KV
   if (hasKV) {
     try {
-      const kvKey = KV_RAW_FILE_BODY_PREFIX + String(rawId);
+      const kvKey = KV_RAW_BODY_PREFIX + String(rawId);
       const raw = await kvGet(kvKey);
       if (raw && typeof raw === 'string' && raw.trim() !== '') {
         return raw;
       }
     } catch (err) {
-      console.error('Failed to load raw file body from KV:', err);
+      console.error('Failed to load raw body from KV:', err);
     }
   }
 
-  // 2) File lokal
+  // 2) File lokal /private-raw
   try {
     ensureRawFilesDir();
-    const base = safeRawFileName(rawId);
-    const luaPath = path.join(RAW_FILES_DIR, base + '.lua');
-    const txtPath = path.join(RAW_FILES_DIR, base + '.txt');
-
-    let localPath = null;
-    if (fs.existsSync(luaPath)) {
-      localPath = luaPath;
-    } else if (fs.existsSync(txtPath)) {
-      localPath = txtPath;
-    }
-
-    if (localPath) {
-      return fs.readFileSync(localPath, 'utf8');
+    const base = safeScriptFileName(rawId);
+    const exts = ['.lua', '.txt', '.raw'];
+    for (const ext of exts) {
+      const filePath = path.join(RAW_FILES_DIR, base + ext);
+      if (fs.existsSync(filePath)) {
+        return fs.readFileSync(filePath, 'utf8');
+      }
     }
   } catch (err) {
-    console.error('Failed to load raw file body from local file:', err);
+    console.error('Failed to load raw body from local file:', err);
   }
 
   return null;
 }
 
-/**
- * Simpan body private raw file (KV + lokal).
- */
-async function saveRawFileBody(rawId, body) {
+async function saveRawBody(rawId, body) {
   if (!rawId) return;
   const strBody = String(body ?? '');
 
-  // KV
+  // 1) KV
   if (hasKV) {
     try {
-      const kvKey = KV_RAW_FILE_BODY_PREFIX + String(rawId);
+      const kvKey = KV_RAW_BODY_PREFIX + String(rawId);
       await kvSet(kvKey, strBody);
     } catch (err) {
-      console.error('Failed to save raw file body to KV:', err);
+      console.error('Failed to save raw body to KV:', err);
     }
   }
 
-  // Lokal
+  // 2) File lokal /private-raw
   try {
     ensureRawFilesDir();
-    const fileName = safeRawFileName(rawId) + '.lua';
-    const localPath = path.join(RAW_FILES_DIR, fileName);
-    fs.writeFileSync(localPath, strBody, 'utf8');
+    const base = safeScriptFileName(rawId);
+    const filePath = path.join(RAW_FILES_DIR, base + '.lua');
+    fs.writeFileSync(filePath, strBody, 'utf8');
   } catch (err) {
-    console.error('Failed to save raw file body to local file:', err);
+    console.error('Failed to save raw body to local file:', err);
   }
 }
 
-/**
- * Hapus body private raw file (KV + lokal).
- */
-async function deleteRawFileBody(rawId) {
+async function removeRawBody(rawId) {
   if (!rawId) return;
 
-  // KV: di-blank
+  // KV: cukup set kosong (karena akses raw link pakai meta rawFiles, body orphan tidak akan terpakai)
   if (hasKV) {
     try {
-      const kvKey = KV_RAW_FILE_BODY_PREFIX + String(rawId);
+      const kvKey = KV_RAW_BODY_PREFIX + String(rawId);
       await kvSet(kvKey, '');
     } catch (err) {
-      console.error('Failed to clear raw file body in KV:', err);
+      console.error('Failed to clear raw body from KV:', err);
     }
   }
 
-  // Lokal: hapus .lua dan .txt jika ada
+  // File lokal: hapus kalau ada
   try {
     ensureRawFilesDir();
-    const base = safeRawFileName(rawId);
-    const luaPath = path.join(RAW_FILES_DIR, base + '.lua');
-    const txtPath = path.join(RAW_FILES_DIR, base + '.txt');
-    if (fs.existsSync(luaPath)) fs.unlinkSync(luaPath);
-    if (fs.existsSync(txtPath)) fs.unlinkSync(txtPath);
-  } catch (err) {
-    console.error('Failed to delete raw file body local file:', err);
-  }
-}
-
-/**
- * Load rawFiles + isi preview (untuk admin-dashboard).
- */
-async function loadRawFilesForAdmin() {
-  const list = await loadRawFiles();
-  const result = [];
-  for (const f of list) {
-    const file = { ...f };
-    try {
-      const body = await loadRawFileBody(file.id);
-      if (body != null) {
-        const maxLen = 500;
-        file.preview =
-          body.length > maxLen ? body.slice(0, maxLen) + '\n…' : body;
-      } else {
-        file.preview = '';
+    const base = safeScriptFileName(rawId);
+    ['.lua', '.txt', '.raw'].forEach((ext) => {
+      const filePath = path.join(RAW_FILES_DIR, base + ext);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
       }
-    } catch (err) {
-      console.error('Failed to build preview for raw file:', err);
-      file.preview = '';
-    }
-    if (!file.updatedAt) {
-      file.updatedAt = '';
-    }
-    result.push(file);
+    });
+  } catch (err) {
+    console.error('Failed to remove raw body local file:', err);
   }
-  return result;
 }
 
 // ---- stats helpers ------------------------------------------------
@@ -909,7 +828,7 @@ async function hydrateScriptsWithKV(scripts) {
  * Tambah counter uses dan users unik (IP-based) di KV ketika loader dipanggil.
  */
 async function incrementCountersKV(script, req) {
-  if (!hasKV || !script || !script.id) return;
+  if (!hasKV) return;
 
   const baseKey = `exhub:script:${script.id}`;
   const usesKey = `${baseKey}:uses`;
@@ -1345,7 +1264,7 @@ app.get('/admin', requireAdmin, async (req, res) => {
   try {
     const period = req.query.period || '24h';
     const { stats, scripts } = await buildAdminStats(period);
-    const rawFiles = await loadRawFilesForAdmin();
+    const rawFiles = await loadRawFiles();
 
     res.render('admin-dashboard', {
       scripts,
@@ -1367,7 +1286,7 @@ app.get('/admin/key-check', requireAdmin, async (req, res) => {
     const rawQ = (req.query.q || '').trim();
 
     const { stats, scripts } = await buildAdminStats(period);
-    const rawFiles = await loadRawFilesForAdmin();
+    const rawFiles = await loadRawFiles();
 
     let keyCheck = null;
 
@@ -1427,7 +1346,7 @@ app.get('/admin/search/user', requireAdmin, async (req, res) => {
 
   try {
     const { stats, scripts } = await buildAdminStats(period);
-    const rawFiles = await loadRawFilesForAdmin();
+    const rawFiles = await loadRawFiles();
 
     const userSearch = {
       query: q,
@@ -1568,12 +1487,17 @@ app.get('/admin/search/user', requireAdmin, async (req, res) => {
     const fallback = await buildAdminStats('24h').catch(() => null);
     const stats = fallback ? fallback.stats : { period: '24h' };
     const scripts = fallback ? fallback.scripts : [];
-    const rawFiles = await loadRawFilesForAdmin().catch(() => []);
     const userSearch = {
       query: q,
       result: null,
       error: 'Terjadi kesalahan saat mencari user Roblox.'
     };
+    let rawFiles = [];
+    try {
+      rawFiles = await loadRawFiles();
+    } catch (e) {
+      rawFiles = [];
+    }
     return res.render('admin-dashboard', {
       scripts,
       stats,
@@ -1610,51 +1534,18 @@ app.post('/admin/exec-users/delete', requireAdmin, async (req, res) => {
   }
 });
 
-// Update script (metadata + optional upload body + Delete Script)
+// Update script (metadata + optional upload body)
 app.post(
   '/admin/scripts/:id',
   requireAdmin,
   upload.single('scriptUpload'),
   async (req, res) => {
-    const action = req.body._action || 'save';
     const scripts = await loadScripts();
     const idx = scripts.findIndex((s) => s.id === req.params.id);
-
-    if (idx === -1) {
-      return res.redirect('/admin');
-    }
+    if (idx === -1) return res.redirect('/admin');
 
     const s = scripts[idx];
 
-    // Aksi Delete Script
-    if (action === 'delete') {
-      // Safety: hanya boleh delete kalau status sudah "down"
-      if (s.status !== 'down') {
-        return res.redirect('/admin');
-      }
-
-      const deletedId = s.id;
-      scripts.splice(idx, 1);
-
-      await saveScripts(scripts);
-
-      try {
-        await deleteScriptBody(deletedId);
-      } catch (err) {
-        console.error('Failed to delete script body (delete action):', err);
-      }
-
-      // Opsional: reset counter uses/users di KV
-      try {
-        await syncScriptCountersToKV({ id: deletedId, uses: 0, users: 0 });
-      } catch (err) {
-        console.error('Failed to reset counters after delete:', err);
-      }
-
-      return res.redirect('/admin');
-    }
-
-    // Aksi Save (default)
     s.name = req.body.name || s.name;
     s.gameName = req.body.gameName || s.gameName;
     s.version = req.body.version || s.version;
@@ -1761,127 +1652,122 @@ app.post(
 );
 
 // ===================================================================
-// Admin Private Raw Files (hanya admin, tidak dipublish ke web/API)
+// Admin API untuk Private Raw Files
 // ===================================================================
 
-// Tambah Private Raw File baru
-app.post(
-  '/admin/raw-files',
-  requireAdmin,
-  upload.single('rawUpload'),
-  async (req, res) => {
-    try {
-      const rawFiles = await loadRawFiles();
-      const id = (req.body.id || '').trim();
-
-      if (!id || rawFiles.some((f) => f.id === id)) {
-        return res.redirect('/admin');
-      }
-
-      const now = new Date().toISOString();
-
-      const newFile = {
-        id,
-        name: (req.body.name || '').trim(),
-        note: (req.body.note || '').trim(),
-        updatedAt: now
-      };
-
-      rawFiles.push(newFile);
-      await saveRawFiles(rawFiles);
-
-      // Body dari textarea / upload
-      const bodyText = (req.body.body || '').trim();
-      let uploadedBody = null;
-      if (req.file && req.file.buffer && req.file.size > 0) {
-        uploadedBody = req.file.buffer.toString('utf8');
-      }
-
-      let finalBody = null;
-      if (uploadedBody) finalBody = uploadedBody;
-      if (bodyText) finalBody = bodyText;
-
-      if (finalBody != null) {
-        try {
-          await saveRawFileBody(newFile.id, finalBody);
-        } catch (err) {
-          console.error('Failed to save raw file body (new):', err);
-        }
-      }
-
-      return res.redirect('/admin');
-    } catch (err) {
-      console.error('Failed to handle /admin/raw-files (create):', err);
-      return res.redirect('/admin');
-    }
-  }
-);
-
-// Update / Delete Private Raw File
+// Update / delete existing private raw file
 app.post(
   '/admin/raw-files/:id',
   requireAdmin,
   upload.single('rawUpload'),
   async (req, res) => {
-    try {
-      const action = req.body._action || 'save';
-      const id = req.params.id;
+    const id = (req.params.id || '').trim();
+    if (!id) return res.redirect('/admin#raw-files');
 
-      let rawFiles = await loadRawFiles();
-      const idx = rawFiles.findIndex((f) => f.id === id);
+    let rawFiles = await loadRawFiles();
+    const idx = rawFiles.findIndex((f) => f.id === id);
+    if (idx === -1) return res.redirect('/admin#raw-files');
 
-      if (idx === -1) {
-        return res.redirect('/admin');
-      }
+    const action = (req.body._action || '').trim();
 
-      const file = rawFiles[idx];
-
-      if (action === 'delete') {
-        rawFiles.splice(idx, 1);
-        await saveRawFiles(rawFiles);
-
-        try {
-          await deleteRawFileBody(id);
-        } catch (err) {
-          console.error('Failed to delete raw file body (delete):', err);
-        }
-
-        return res.redirect('/admin');
-      }
-
-      // Aksi Save
-      const now = new Date().toISOString();
-
-      file.name = (req.body.name || '').trim();
-      file.note = (req.body.note || '').trim();
-      file.updatedAt = now;
-
+    if (action === 'delete') {
+      // Hapus meta + body
+      rawFiles = rawFiles.filter((f) => f.id !== id);
       await saveRawFiles(rawFiles);
-
-      // Body dari textarea / upload
-      const bodyText = (req.body.body || '').trim();
-      let uploadedBody = null;
-      if (req.file && req.file.buffer && req.file.size > 0) {
-        uploadedBody = req.file.buffer.toString('utf8');
+      try {
+        await removeRawBody(id);
+      } catch (err) {
+        console.error('Failed to remove raw body on delete:', err);
       }
-
-      let finalBody = null;
-      if (uploadedBody) finalBody = uploadedBody;
-      if (bodyText) finalBody = bodyText;
-
-      if (finalBody != null) {
-        try {
-          await saveRawFileBody(file.id, finalBody);
-        } catch (err) {
-          console.error('Failed to save raw file body (update):', err);
-        }
-      }
-
-      return res.redirect('/admin');
-    } catch (err) {
-      console.error('Failed to handle /admin/raw-files/:id:', err);
-      return res.redirect('/admin');
+      return res.redirect('/admin#raw-files');
     }
+
+    const file = rawFiles[idx];
+    file.name = req.body.name || file.name || '';
+    file.note = req.body.note || file.note || '';
+
+    const now = new Date().toISOString();
+
+    const bodyText = req.body.body || '';
+    let uploadedBody = null;
+    if (req.file && req.file.buffer && req.file.size > 0) {
+      uploadedBody = req.file.buffer.toString('utf8');
+    }
+
+    let finalBody = null;
+    if (uploadedBody) {
+      finalBody = uploadedBody;
+    }
+    if (bodyText.trim() !== '') {
+      finalBody = bodyText;
+    }
+
+    if (finalBody != null) {
+      try {
+        await saveRawBody(id, finalBody);
+        file.preview = finalBody.slice(0, 800);
+      } catch (err) {
+        console.error('Failed to save raw body (update):', err);
+      }
+      file.updatedAt = now;
+    } else {
+      // Tidak ada perubahan body, tetap update timestamp minimal sekali
+      file.updatedAt = file.updatedAt || now;
+    }
+
+    await saveRawFiles(rawFiles);
+
+    return res.redirect('/admin#raw-files');
+  }
+);
+
+// Tambah private raw file baru
+app.post(
+  '/admin/raw-files',
+  requireAdmin,
+  upload.single('rawUpload'),
+  async (req, res) => {
+    const id = (req.body.id || '').trim();
+    if (!id) return res.redirect('/admin#raw-files');
+
+    let rawFiles = await loadRawFiles();
+    if (rawFiles.some((f) => f.id === id)) {
+      // ID sudah dipakai
+      return res.redirect('/admin#raw-files');
+    }
+
+    const now = new Date().toISOString();
+
+    const bodyText = req.body.body || '';
+    let uploadedBody = null;
+    if (req.file && req.file.buffer && req.file.size > 0) {
+      uploadedBody = req.file.buffer.toString('utf8');
+    }
+
+    let finalBody = '';
+    if (uploadedBody) finalBody = uploadedBody;
+    if (bodyText.trim() !== '') finalBody = bodyText;
+
+    const newFile = {
+      id,
+      name: req.body.name || '',
+      note: req.body.note || '',
+      updatedAt: now,
+      preview: finalBody ? finalBody.slice(0, 800) : ''
+    };
+
+    rawFiles.push(newFile);
+    await saveRawFiles(rawFiles);
+
+    if (finalBody) {
+      try {
+        await saveRawBody(id, finalBody);
+      } catch (err) {
+        console.error('Failed to save raw body (new):', err);
+      }
+    }
+
+    return res.redirect('/admin#raw-files');
   }
 );
 
@@ -1909,6 +1795,35 @@ app.get('/admin/api/exec-users/:scriptId', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('Failed to load exec users by scriptId:', err);
     res.status(500).json({ error: 'exec_users_error' });
+  }
+});
+
+// ===================================================================
+// Public endpoint untuk Private Raw Links: /:id.raw
+// ===================================================================
+
+app.get('/:rawId.raw', async (req, res, next) => {
+  try {
+    const rawId = (req.params.rawId || '').trim();
+    if (!rawId) return next();
+
+    const rawFiles = await loadRawFiles();
+    const fileMeta = rawFiles.find((f) => f.id === rawId);
+    if (!fileMeta) {
+      // Tidak terdaftar sebagai private raw file → biarkan 404 fallback
+      return next();
+    }
+
+    const body = await loadRawBody(rawId);
+    if (!body) {
+      return res.status(404).send('Raw file not found.');
+    }
+
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return res.send(body);
+  } catch (err) {
+    console.error('Failed to serve raw link:', err);
+    return res.status(500).send('Server error (raw).');
   }
 });
 
