@@ -279,9 +279,6 @@
                     </div>
                   </td>
                   <td>
-                    <% if (item.key) { %>
-                      <!-- item.key dari buildAdminStats (composite scriptId:userId:hwid) -->
-                    <% } %>
                     <form method="post"
                           action="/admin/exec-users/delete"
                           onsubmit="return confirm('Yakin hapus data tracking player ini?');">
@@ -719,6 +716,7 @@
             <h2 class="admin-subtitle">Scripts</h2>
             <p class="card-description">
               Konfigurasi metadata setiap script (nama, game, versi, status, free/premium, thumbnail, dan file).
+              Untuk menghapus script: ubah status ke <strong>down</strong>, simpan, lalu gunakan tombol Delete.
             </p>
           </div>
         </header>
@@ -730,13 +728,34 @@
                   enctype="multipart/form-data"
                   class="admin-script-row">
               <div class="row-main">
-                <div class="row-title">
-                  <strong><%= script.id %></strong>
-                  <% if (script.gameName) { %>
-                    <span class="row-subtitle"><%= script.gameName %></span>
-                  <% } %>
+
+                <!-- HEADER SCRIPT (lebih ringkas, ramah mobile) -->
+                <div class="row-header">
+                  <div class="row-title">
+                    <strong><%= script.id %></strong>
+                    <% if (script.gameName) { %>
+                      <span class="row-subtitle"><%= script.gameName %></span>
+                    <% } %>
+                    <% if (script.name && script.name !== script.id) { %>
+                      <div class="row-subtitle small">
+                        <%= script.name %>
+                      </div>
+                    <% } %>
+                  </div>
+                  <div class="row-tags">
+                    <span class="badge-soft">
+                      Status: <%= script.status || 'working' %>
+                    </span>
+                    <span class="badge-soft">
+                      Uses: <%= script.uses || 0 %>
+                    </span>
+                    <span class="badge-soft">
+                      Users: <%= script.users || 0 %>
+                    </span>
+                  </div>
                 </div>
 
+                <!-- FORM DETAIL (grid-friendly, tetap satu kolom di mobile) -->
                 <div class="row-cols">
                   <label>
                     Name
@@ -791,8 +810,29 @@
                   </label>
                 </div>
               </div>
+
+              <!-- ACTIONS: SAVE + DELETE (delete hanya aktif jika status = down) -->
               <div class="row-actions">
-                <button class="btn-primary btn-small" type="submit">Save</button>
+                <button class="btn-primary btn-small"
+                        type="submit"
+                        name="_action"
+                        value="save">
+                  Save
+                </button>
+
+                <% if (script.status === 'down') { %>
+                  <button class="btn-ghost btn-small"
+                          type="submit"
+                          name="_action"
+                          value="delete"
+                          onclick="return confirm('Yakin hapus script ini beserta body Lua/txt dari loader?');">
+                    Delete Script
+                  </button>
+                <% } else { %>
+                  <span class="row-actions-note small">
+                    Set status ke <strong>down</strong> lalu Save untuk mengaktifkan tombol <em>Delete Script</em>.
+                  </span>
+                <% } %>
               </div>
             </form>
           <% }) %>
@@ -823,14 +863,18 @@
                     enctype="multipart/form-data"
                     class="admin-script-row">
                 <div class="row-main">
-                  <div class="row-title">
-                    <strong><%= file.id %></strong>
-                    <% if (file.name) { %>
-                      <span class="row-subtitle"><%= file.name %></span>
-                    <% } %>
-                  </div>
-                  <div class="row-subtitle small">
-                    Last update: <%= file.updatedAt || '-' %>
+                  <div class="row-header">
+                    <div class="row-title">
+                      <strong><%= file.id %></strong>
+                      <% if (file.name) { %>
+                        <span class="row-subtitle"><%= file.name %></span>
+                      <% } %>
+                    </div>
+                    <div class="row-tags">
+                      <span class="badge-soft">
+                        Last update: <%= file.updatedAt || '-' %>
+                      </span>
+                    </div>
                   </div>
 
                   <div class="row-cols">
@@ -856,12 +900,13 @@
                 </div>
                 <div class="row-actions">
                   <button class="btn-primary btn-small" type="submit">Save</button>
-                  <form method="post"
-                        action="/admin/raw-files/<%= file.id %>/delete"
-                        onsubmit="return confirm('Yakin hapus private file ini?');"
-                        class="inline-delete-form">
-                    <button class="btn-ghost btn-small" type="submit">Delete</button>
-                  </form>
+                  <button class="btn-ghost btn-small"
+                          type="submit"
+                          name="_action"
+                          value="delete"
+                          onclick="return confirm('Yakin hapus private file ini?');">
+                    Delete
+                  </button>
                 </div>
               </form>
             <% }) %>
