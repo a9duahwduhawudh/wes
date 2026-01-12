@@ -6,6 +6,265 @@
   <title>ExHub — Admin Dashboard</title>
   <link rel="icon" type="image/png" href="/img/ExLogo2.png" />
   <link rel="stylesheet" href="/css/main.css" />
+
+  <!-- Admin Dashboard: Responsive Layout & UX Upgrade (mobile + desktop) -->
+  <style>
+    /* Root layout */
+    .admin-dashboard {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      padding-bottom: 32px;
+    }
+
+    /* Section spacing */
+    .admin-section {
+      margin-top: 24px;
+    }
+
+    /* Top nav tabs (anchor ke section) */
+    .admin-nav-tabs {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 8px 0 20px;
+      padding-bottom: 4px;
+      overflow-x: auto;
+      scrollbar-width: thin;
+      border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+    }
+
+    .admin-nav-tab {
+      flex-shrink: 0;
+      text-decoration: none;
+      font-size: 0.8rem;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.15));
+      background: rgba(9, 12, 20, 0.9);
+      color: var(--text-muted, #9ca3c0);
+    }
+
+    .admin-nav-tab:hover {
+      border-color: var(--accent, #7bff3a);
+      color: var(--text-main, #f5f7ff);
+    }
+
+    .admin-nav-tab:focus-visible {
+      outline: 2px solid var(--accent, #7bff3a);
+      outline-offset: 2px;
+    }
+
+    /* Main two-column layout (activity + side stats) */
+    .dashboard-main {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .dashboard-side {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* Generic grid/stack untuk form di admin */
+    .admin-dashboard .row-cols {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    /* Quick Search bar */
+    .admin-search .search-row {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .admin-search .search-form {
+      width: 100%;
+    }
+
+    /* Table scroll + kompak di mobile */
+    .table-wrapper {
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .table.table-compact th,
+    .table.table-compact td {
+      white-space: nowrap;
+    }
+
+    /* Script / raw file cards */
+    .admin-table {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .admin-script-row {
+      border-radius: var(--radius-lg, 18px);
+    }
+
+    .admin-script-row .row-main {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .row-header {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .row-title {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .row-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .row-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      flex-wrap: wrap;
+    }
+
+    .row-actions-note {
+      color: var(--text-muted, #9ca3c0);
+    }
+
+    /* UserSearch result card (Roblox lookup) */
+    .user-result-card {
+      margin-top: 16px;
+      border-radius: var(--radius-md, 12px);
+      border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+      padding: 12px;
+      background: rgba(9, 12, 20, 0.9);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .user-result-main {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .user-avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 999px;
+      overflow: hidden;
+      flex-shrink: 0;
+      background: #020617;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .user-avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .user-avatar-placeholder {
+      font-size: 0.7rem;
+      color: var(--text-muted, #9ca3c0);
+    }
+
+    .user-result-name {
+      font-size: 0.95rem;
+    }
+
+    .user-result-username {
+      font-size: 0.8rem;
+      color: var(--text-muted, #9ca3c0);
+    }
+
+    .user-result-meta {
+      font-size: 0.75rem;
+      color: var(--text-muted, #9ca3c0);
+    }
+
+    .user-result-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .chip-soft {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 4px 10px;
+      background: rgba(148, 163, 184, 0.12);
+      color: var(--text-muted, #9ca3c0);
+      font-size: 0.75rem;
+    }
+
+    /* Breakpoints */
+    @media (min-width: 640px) {
+      .admin-search .search-row {
+        flex-direction: row;
+        flex-wrap: wrap;
+      }
+      .admin-search .search-form {
+        flex: 1 1 220px;
+      }
+    }
+
+    @media (min-width: 768px) {
+      .admin-dashboard .row-cols {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px 16px;
+      }
+      .admin-dashboard .keycheck-form .row-cols {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .admin-dashboard .add-form .row-cols {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (min-width: 1024px) {
+      .dashboard-main {
+        flex-direction: row;
+        align-items: flex-start;
+      }
+      .card-main {
+        flex: 2;
+      }
+      .dashboard-side {
+        flex: 1;
+        position: sticky;
+        top: 88px;
+      }
+      .admin-dashboard .row-main {
+        flex-direction: column;
+      }
+      .admin-nav-tabs {
+        justify-content: flex-end;
+      }
+    }
+  </style>
 </head>
 <body class="page-dark">
 
@@ -27,7 +286,7 @@
   <div class="container admin-dashboard">
 
     <!-- HEADER + FILTER -->
-    <section class="dashboard-header">
+    <section class="dashboard-header" id="overview">
       <div class="dashboard-header-main">
         <h1 class="section-title small">Dashboard</h1>
         <p class="section-subtitle">
@@ -49,8 +308,20 @@
       </form>
     </section>
 
+    <!-- NAV TABS (ANCHOR KE SECTION) -->
+    <nav class="admin-nav-tabs" aria-label="Dashboard sections">
+      <a href="#overview" class="admin-nav-tab">Overview</a>
+      <a href="#search" class="admin-nav-tab">Search</a>
+      <a href="#key-check" class="admin-nav-tab">Key Checker</a>
+      <a href="#activity" class="admin-nav-tab">Activity</a>
+      <a href="#stats-lists" class="admin-nav-tab">Top Stats</a>
+      <a href="#loader-users" class="admin-nav-tab">Loader Users</a>
+      <a href="#scripts-section" class="admin-nav-tab">Scripts</a>
+      <a href="#raw-files" class="admin-nav-tab">Raw Files</a>
+    </nav>
+
     <!-- TOP OVERVIEW STATS -->
-    <section class="dashboard-overview card-grid">
+    <section class="dashboard-overview card-grid" id="overview-cards">
       <article class="stat-card">
         <div class="stat-card-label">Supported Games</div>
         <div class="stat-card-value"><%= stats.totalGames || 0 %></div>
@@ -107,7 +378,7 @@
     </section>
 
     <!-- QUICK SEARCH AREA -->
-    <section class="card admin-search">
+    <section class="card admin-search" id="search">
       <header class="card-header">
         <h2 class="admin-subtitle">Quick Search</h2>
         <p class="card-description">
@@ -140,10 +411,64 @@
           <button class="btn-outline btn-small" type="submit">Key Check</button>
         </form>
       </div>
+
+      <!-- HASIL /admin/search/user (Roblox lookup) -->
+      <% if (typeof userSearch !== 'undefined' && userSearch && (userSearch.result || userSearch.error)) { %>
+        <div class="search-result">
+          <% if (userSearch.error) { %>
+            <p class="empty-state small" style="margin-top: 10px;">
+              <%= userSearch.error %>
+            </p>
+          <% } %>
+
+          <% if (userSearch.result) { 
+               var u = userSearch.result; %>
+            <div class="user-result-card">
+              <div class="user-result-main">
+                <div class="user-avatar">
+                  <% if (u.avatarUrl) { %>
+                    <img src="<%= u.avatarUrl %>" alt="<%= u.username || 'Roblox User' %>" />
+                  <% } else { %>
+                    <div class="user-avatar-placeholder">RBX</div>
+                  <% } %>
+                </div>
+                <div>
+                  <div class="user-result-name">
+                    <strong><%= u.displayName || u.username || '-' %></strong>
+                  </div>
+                  <div class="user-result-username">
+                    @<%= u.username || '-' %> · ID: <%= u.id || '-' %>
+                  </div>
+                  <% if (u.created) { %>
+                    <div class="user-result-meta">
+                      Joined: <%= u.created %>
+                    </div>
+                  <% } %>
+                </div>
+              </div>
+              <div class="user-result-footer">
+                <% if (u.profileUrl) { %>
+                  <a href="<%= u.profileUrl %>" 
+                     class="btn-ghost btn-small" 
+                     target="_blank" 
+                     rel="noopener noreferrer">
+                    Open Roblox Profile
+                  </a>
+                <% } %>
+                <% if (userSearch.query) { %>
+                  <span class="chip-soft">
+                    Query: <%= userSearch.query %>
+                  </span>
+                <% } %>
+              </div>
+            </div>
+          <% } %>
+        </div>
+      <% } %>
     </section>
 
     <!-- KEY CHECKER CARD -->
-    <section class="card admin-keycheck">
+    <section class="card admin-keycheck" id="key-check">
       <header class="card-header">
         <div>
           <h2 class="admin-subtitle">Key Checker (Work.ink / Username)</h2>
@@ -305,7 +630,7 @@
     </section>
 
     <!-- MAIN LAYOUT: LEFT = ACTIVITY, RIGHT = TOP LISTS -->
-    <div class="dashboard-main">
+    <div class="dashboard-main" id="activity">
 
       <!-- LEFT: LATEST EXECUTIONS -->
       <section class="card card-main">
@@ -459,7 +784,7 @@
       </section>
 
       <!-- RIGHT: TOP LISTS -->
-      <aside class="dashboard-side">
+      <aside class="dashboard-side" id="stats-lists">
 
         <!-- TOP SCRIPTS -->
         <section class="card">
@@ -570,7 +895,7 @@
     </div>
 
     <!-- LOADER USERS LIST (ALL PLAYERS) -->
-    <section class="admin-section">
+    <section class="admin-section" id="loader-users">
       <div class="card">
         <header class="card-header">
           <div>
@@ -709,7 +1034,7 @@
     </section>
 
     <!-- SCRIPT MANAGEMENT -->
-    <section class="admin-section">
+    <section class="admin-section" id="scripts-section">
       <div class="card">
         <header class="card-header">
           <div>
@@ -729,7 +1054,7 @@
                   class="admin-script-row">
               <div class="row-main">
 
-                <!-- HEADER SCRIPT (lebih ringkas, ramah mobile) -->
+                <!-- HEADER SCRIPT (ringkas, ramah mobile) -->
                 <div class="row-header">
                   <div class="row-title">
                     <strong><%= script.id %></strong>
@@ -755,7 +1080,7 @@
                   </div>
                 </div>
 
-                <!-- FORM DETAIL (grid-friendly, tetap satu kolom di mobile) -->
+                <!-- FORM DETAIL -->
                 <div class="row-cols">
                   <label>
                     Name
@@ -841,7 +1166,7 @@
     </section>
 
     <!-- PRIVATE RAW FILES (HANYA ADMIN, TIDAK DIPUBLISH KE WEB/API) -->
-    <section class="admin-section">
+    <section class="admin-section" id="raw-files">
       <div class="card">
         <header class="card-header">
           <div>
@@ -920,7 +1245,7 @@
     </section>
 
     <!-- ADD NEW PRIVATE RAW FILE -->
-    <section class="admin-section">
+    <section class="admin-section" id="add-raw-file">
       <div class="card">
         <header class="card-header">
           <div>
@@ -965,7 +1290,7 @@
     </section>
 
     <!-- ADD NEW SCRIPT (PUBLISHED VIA LOADER API) -->
-    <section class="admin-section">
+    <section class="admin-section" id="add-script">
       <div class="card">
         <header class="card-header">
           <div>
