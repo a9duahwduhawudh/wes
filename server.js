@@ -692,7 +692,8 @@ async function buildAdminStats(period) {
         executeCount: u.clientExecuteCount || u.totalExecutes || 1,
         mapName: u.mapName || null,
         placeId: u.placeId || null,
-        serverId: u.serverId || null
+        serverId: u.serverId || null,
+        allMapList: Array.isArray(u.allMapList) ? u.allMapList : null
       };
     });
 
@@ -782,7 +783,11 @@ async function buildAdminStats(period) {
         lastIp: u.lastIp || '',
         keyToken: u.keyToken || null,
         keyCreatedAt: u.keyCreatedAt || null,
-        keyExpiresAt: u.keyExpiresAt || null
+        keyExpiresAt: u.keyExpiresAt || null,
+        mapName: u.mapName || null,
+        placeId: u.placeId || null,
+        serverId: u.serverId || null,
+        allMapList: Array.isArray(u.allMapList) ? u.allMapList : null
       };
     });
 
@@ -1038,6 +1043,9 @@ app.get('/api/script/:id', async (req, res) => {
 
 /**
  * Endpoint yang dipanggil dari loader / script Roblox untuk melaporkan eksekusi.
+ * Sekarang mendukung:
+ * - mapName, placeId, serverId (info eksekusi terakhir)
+ * - allMapList (array histori map yang pernah dipakai user+hwid untuk scriptId tersebut)
  */
 app.post('/api/exec', async (req, res) => {
   try {
@@ -1056,7 +1064,8 @@ app.post('/api/exec', async (req, res) => {
       expiresAt,
       mapName,
       placeId,
-      serverId
+      serverId,
+      allMapList
     } = req.body || {};
 
     if (!scriptId || !userId || !hwid) {
@@ -1094,6 +1103,74 @@ app.post('/api/exec', async (req, res) => {
       req.socket.remoteAddress ||
       'unknown';
 
+    // normalisasi map info sekarang
+    const normalizedPlaceId =
+      placeId !== undefined && placeId !== null ? String(placeId) : null;
+    const normalizedServerId =
+      serverId !== undefined && serverId !== null ? String(serverId) : null;
+
+    const currentMapInfo =
+      mapName || normalizedPlaceId || normalizedServerId
+        ? {
+            mapName: mapName || '',
+            placeId: normalizedPlaceId,
+            serverId: normalizedServerId
+          }
+        : null;
+
+    // helper merge allMapList lama + kiriman baru + map sekarang
+    function mergeAllMapList(existing, clientList, currentInfo) {
+      const result = Array.isArray(existing) ? [...existing] : [];
+
+      const pushIfNew = (m) => {
+        if (!m || typeof m !== 'object') return;
+        const name = String(m.mapName || m.name || '').trim();
+        const pid =
+          m.placeId !== undefined && m.placeId !== null
+            ? String(m.placeId)
+            : null;
+        const sid =
+          m.serverId !== undefined && m.serverId !== null
+            ? String(m.serverId)
+            : null;
+
+        // kalau semuanya kosong, skip
+        if (!name && !pid && !sid) return;
+
+        const already = result.find((x) => {
+          const xName = String(x.mapName || x.name || '').trim();
+          const xPid =
+            x.placeId !== undefined && x.placeId !== null
+              ? String(x.placeId)
+              : null;
+          const xSid =
+            x.serverId !== undefined && x.serverId !== null
+              ? String(x.serverId)
+              : null;
+
+          return xName === name && xPid === pid && xSid === sid;
+        });
+
+        if (!already) {
+          result.push({
+            mapName: name,
+            placeId: pid,
+            serverId: sid
+          });
+        }
+      };
+
+      if (Array.isArray(clientList)) {
+        clientList.forEach((m) => pushIfNew(m));
+      }
+
+      if (currentInfo) {
+        pushIfNew(currentInfo);
+      }
+
+      return result;
+    }
+
     let execUsers = await loadExecUsers();
     const compositeKey = `${String(scriptId)}:${String(userId)}:${String(
       hwid
@@ -1103,6 +1180,12 @@ app.post('/api/exec', async (req, res) => {
     let entry = execUsers.find((u) => u.key === compositeKey);
 
     if (!entry) {
+      const mergedAllMap = mergeAllMapList(
+        null,
+        Array.isArray(allMapList) ? allMapList : null,
+        currentMapInfo
+      );
+
       entry = {
         key: compositeKey,
         scriptId: String(scriptId),
@@ -1120,8 +1203,9 @@ app.post('/api/exec', async (req, res) => {
         lastIp: ip,
         totalExecutes: 1,
         mapName: mapName || null,
-        placeId: placeId || null,
-        serverId: serverId || null
+        placeId: normalizedPlaceId,
+        serverId: normalizedServerId,
+        allMapList: mergedAllMap
       };
       execUsers.push(entry);
     } else {
@@ -1155,12 +1239,19 @@ app.post('/api/exec', async (req, res) => {
       if (mapName) {
         entry.mapName = mapName;
       }
-      if (placeId) {
-        entry.placeId = placeId;
+      if (normalizedPlaceId != null) {
+        entry.placeId = normalizedPlaceId;
       }
-      if (serverId) {
-        entry.serverId = serverId;
+      if (normalizedServerId != null) {
+        entry.serverId = normalizedServerId;
       }
+
+      // merge histori allMapList
+      entry.allMapList = mergeAllMapList(
+        entry.allMapList,
+        Array.isArray(allMapList) ? allMapList : null,
+        currentMapInfo
+      );
     }
 
     await saveExecUsers(execUsers);
@@ -1179,8 +1270,9 @@ app.post('/api/exec', async (req, res) => {
         createdAt: createdAtStr,
         expiresAt: expiresAtStr,
         mapName,
-        placeId,
-        serverId
+        placeId: normalizedPlaceId,
+        serverId: normalizedServerId,
+        allMapList: Array.isArray(entry.allMapList) ? entry.allMapList : null
       }
     });
   } catch (err) {
