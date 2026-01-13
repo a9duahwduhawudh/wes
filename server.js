@@ -79,6 +79,15 @@ async function kvSAdd(key, member) {
 async function kvSCard(key) {
   return kvRequest(kvPath('SCARD', key));
 }
+async function kvSMembers(key) {
+  return kvRequest(kvPath('SMEMBERS', key));
+}
+async function kvSRem(key, member) {
+  return kvRequest(kvPath('SREM', key, member));
+}
+async function kvDel(key) {
+  return kvRequest(kvPath('DEL', key));
+}
 
 async function kvGetInt(key) {
   const result = await kvGet(key);
@@ -114,8 +123,11 @@ const EXEC_USERS_PATH = path.join(__dirname, 'config', 'exec-users.json');
 const SCRIPTS_RAW_DIR = path.join(__dirname, 'scripts-raw');
 const KV_SCRIPTS_META_KEY = 'exhub:scripts-meta';
 const KV_REDEEMED_KEY = 'exhub:redeemed-keys';
-// key KV untuk data tracking eksekusi user
+// key KV untuk data tracking eksekusi user (format legacy: array besar)
 const KV_EXEC_USERS_KEY = 'exhub:exec-users';
+// format baru: per-entry + index
+const KV_EXEC_ENTRY_PREFIX = 'exhub:exec-user:';    // exhub:exec-user:<entryKey>
+const KV_EXEC_INDEX_KEY = 'exhub:exec-users:index'; // set berisi entryKey
 // prefix KV untuk body script
 const KV_SCRIPT_BODY_PREFIX = 'exhub:script-body:';
 
@@ -319,37 +331,71 @@ async function saveRedeemedKeys(list) {
 }
 
 // helper utama untuk exec-users (tracking user/player)
-
+/**
+ * Format baru (KV):
+ * - Index: SADD exhub:exec-users:index <entryKey>
+ * - Entry: SET exhub:exec-user:<entryKey> "<json>"
+ * Di local dev / tanpa KV tetap pakai file exec-users.json (array).
+ */
 async function loadExecUsers() {
+  // Prefer data di KV (format baru per-entry)
   if (hasKV) {
-    const raw = await kvGet(KV_EXEC_USERS_KEY);
-    if (raw && typeof raw === 'string') {
-      try {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
-      } catch (e) {
-        console.error('Failed to parse exec users from KV:', e);
-      }
-    }
-    // Seed dari file kalau KV belum punya
-    const seeded = loadExecUsersFromFile();
     try {
-      await kvSet(KV_EXEC_USERS_KEY, JSON.stringify(seeded));
-    } catch (e) {
-      console.error('Failed to seed exec users to KV:', e);
+      const index = await kvSMembers(KV_EXEC_INDEX_KEY);
+      if (Array.isArray(index) && index.length > 0) {
+        const results = [];
+        for (const entryKey of index) {
+          if (!entryKey) continue;
+          const raw = await kvGet(KV_EXEC_ENTRY_PREFIX + entryKey);
+          if (!raw || typeof raw !== 'string' || !raw.trim()) continue;
+          try {
+            const obj = JSON.parse(raw);
+            if (obj && typeof obj === 'object') {
+              obj.key = obj.key || entryKey;
+              results.push(obj);
+            }
+          } catch (e) {
+            console.error(
+              'Failed to parse exec-user from KV for key',
+              entryKey,
+              e
+            );
+          }
+        }
+        if (results.length) {
+          return results;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load exec-users from KV index:', err);
     }
-    return seeded;
+
+    // Fallback legacy: 1 key berisi array besar
+    try {
+      const rawLegacy = await kvGet(KV_EXEC_USERS_KEY);
+      if (rawLegacy && typeof rawLegacy === 'string') {
+        const parsed = JSON.parse(rawLegacy);
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load legacy exec-users from KV:', e);
+    }
   }
+
+  // Terakhir: file lokal (dev)
   return loadExecUsersFromFile();
 }
 
 async function saveExecUsers(list) {
+  // Sekarang hanya digunakan sebagai fallback / dev.
   const json = JSON.stringify(list);
   if (hasKV) {
     try {
       await kvSet(KV_EXEC_USERS_KEY, json);
     } catch (e) {
-      console.error('Failed to save exec users to KV:', e);
+      console.error('Failed to save exec users to KV (legacy key):', e);
     }
   }
   saveExecUsersToFile(list);
@@ -976,7 +1022,7 @@ app.get('/api/script/:id', async (req, res) => {
   const script = scripts.find((s) => s.id === req.params.id);
 
   // snippet loader yang akan ditampilkan di api-404.ejs
-  const loaderSnippet = `loadstring(game:HttpGet("https://excc-webs.vercel.app/api/script/${req.params.id}", true))()`;
+  const loaderSnippet = `loadstring(game:HttpGet("https://exc-webs.vercel.app/api/script/${req.params.id}", true))()`;
 
   // Script tidak terdaftar
   if (!script) {
@@ -1049,7 +1095,6 @@ app.get('/api/script/:id', async (req, res) => {
  * - Menyimpan daftar unik serverIds per map
  * - serverId di-set ke server terakhir (kompatibilitas UI lama)
  */
-// REVISION: helper baru
 function upsertMapHistory(entry, opts) {
   if (!entry || !opts) return;
 
@@ -1144,6 +1189,112 @@ function upsertMapHistory(entry, opts) {
 }
 
 /**
+ * Upsert 1 entry exec-user di KV (format baru).
+ */
+async function upsertExecUserKV(meta) {
+  if (!hasKV) return null;
+
+  const {
+    scriptId,
+    userId,
+    username,
+    displayName,
+    hwid,
+    executorUse,
+    execCountNum,
+    keyToken,
+    createdAtStr,
+    expiresAtStr,
+    ip,
+    mapName,
+    placeId,
+    serverId,
+    gameId
+  } = meta;
+
+  const compositeKey = `${String(scriptId)}:${String(userId)}:${String(
+    hwid
+  )}`;
+  const nowIso = new Date().toISOString();
+
+  let entry = null;
+  try {
+    const raw = await kvGet(KV_EXEC_ENTRY_PREFIX + compositeKey);
+    if (raw && typeof raw === 'string' && raw.trim() !== '') {
+      entry = JSON.parse(raw);
+    }
+  } catch (err) {
+    console.error('Failed to read exec-user from KV:', err);
+  }
+
+  if (!entry) {
+    entry = {
+      key: compositeKey,
+      scriptId: String(scriptId),
+      userId: String(userId),
+      username: username || null,
+      displayName: displayName || null,
+      hwid: String(hwid),
+      executorUse: executorUse || null,
+      clientExecuteCount: execCountNum,
+      keyToken: keyToken || null,
+      keyCreatedAt: createdAtStr || null,
+      keyExpiresAt: expiresAtStr || null,
+      firstExecuteAt: nowIso,
+      lastExecuteAt: nowIso,
+      lastIp: ip,
+      totalExecutes: 1,
+      mapName: mapName || null,
+      placeId:
+        placeId !== undefined && placeId !== null ? String(placeId) : null,
+      serverId: serverId || null,
+      gameId:
+        gameId !== undefined && gameId !== null ? String(gameId) : null,
+      allMapList: []
+    };
+  } else {
+    entry.username = username || entry.username;
+    entry.displayName = displayName || entry.displayName;
+    entry.lastExecuteAt = nowIso;
+    entry.lastIp = ip;
+    entry.totalExecutes = (entry.totalExecutes || 0) + 1;
+
+    if (executorUse) entry.executorUse = executorUse;
+    if (execCountNum != null) entry.clientExecuteCount = execCountNum;
+    if (keyToken) entry.keyToken = keyToken;
+    if (createdAtStr) entry.keyCreatedAt = createdAtStr;
+    if (expiresAtStr) entry.keyExpiresAt = expiresAtStr;
+
+    if (mapName) entry.mapName = mapName;
+    if (placeId !== undefined && placeId !== null) {
+      entry.placeId = String(placeId);
+    }
+    if (serverId) {
+      entry.serverId = serverId;
+    }
+    if (gameId !== undefined && gameId !== null) {
+      entry.gameId = String(gameId);
+    }
+
+    if (!Array.isArray(entry.allMapList)) {
+      entry.allMapList = [];
+    }
+  }
+
+  // update riwayat map
+  upsertMapHistory(entry, { mapName, placeId, serverId, gameId });
+
+  try {
+    await kvSet(KV_EXEC_ENTRY_PREFIX + compositeKey, JSON.stringify(entry));
+    await kvSAdd(KV_EXEC_INDEX_KEY, compositeKey);
+  } catch (err) {
+    console.error('Failed to upsert exec-user to KV:', err);
+  }
+
+  return entry;
+}
+
+/**
  * Endpoint yang dipanggil dari loader / script Roblox untuk melaporkan eksekusi.
  */
 app.post('/api/exec', async (req, res) => {
@@ -1202,89 +1353,111 @@ app.post('/api/exec', async (req, res) => {
       req.socket.remoteAddress ||
       'unknown';
 
-    let execUsers = await loadExecUsers();
-    const compositeKey = `${String(scriptId)}:${String(userId)}:${String(
-      hwid
-    )}`;
-    const now = new Date().toISOString();
-
-    let entry = execUsers.find((u) => u.key === compositeKey);
-
-    if (!entry) {
-      entry = {
-        key: compositeKey,
-        scriptId: String(scriptId),
-        userId: String(userId),
-        username: username || null,
-        displayName: displayName || null,
-        hwid: String(hwid),
-        executorUse: executorUse || null,
-        clientExecuteCount: execCountNum,
-        keyToken: keyToken || null,
-        keyCreatedAt: createdAtStr || null,
-        keyExpiresAt: expiresAtStr || null,
-        firstExecuteAt: now,
-        lastExecuteAt: now,
-        lastIp: ip,
-        totalExecutes: 1,
-        mapName: mapName || null,
-        placeId: placeId !== undefined && placeId !== null ? String(placeId) : null,
-        serverId: serverId || null,
-        gameId: gameId !== undefined && gameId !== null ? String(gameId) : null,
-        allMapList: [] // REVISION: init
-      };
-
-      // REVISION: isi riwayat map pertama
-      upsertMapHistory(entry, { mapName, placeId, serverId, gameId });
-
-      execUsers.push(entry);
+    if (hasKV) {
+      await upsertExecUserKV({
+        scriptId,
+        userId,
+        username,
+        displayName,
+        hwid,
+        executorUse,
+        execCountNum,
+        keyToken,
+        createdAtStr,
+        expiresAtStr,
+        ip,
+        mapName,
+        placeId,
+        serverId,
+        gameId
+      });
     } else {
-      // Update info terbaru
-      entry.username = username || entry.username;
-      entry.displayName = displayName || entry.displayName;
-      entry.lastExecuteAt = now;
-      entry.lastIp = ip;
-      entry.totalExecutes = (entry.totalExecutes || 0) + 1;
+      // Fallback local file (dev mode)
+      let execUsers = await loadExecUsers();
+      const compositeKey = `${String(scriptId)}:${String(userId)}:${String(
+        hwid
+      )}`;
+      const now = new Date().toISOString();
 
-      if (executorUse && executorUse !== '') {
-        entry.executorUse = executorUse;
+      let entry = execUsers.find((u) => u.key === compositeKey);
+
+      if (!entry) {
+        entry = {
+          key: compositeKey,
+          scriptId: String(scriptId),
+          userId: String(userId),
+          username: username || null,
+          displayName: displayName || null,
+          hwid: String(hwid),
+          executorUse: executorUse || null,
+          clientExecuteCount: execCountNum,
+          keyToken: keyToken || null,
+          keyCreatedAt: createdAtStr || null,
+          keyExpiresAt: expiresAtStr || null,
+          firstExecuteAt: now,
+          lastExecuteAt: now,
+          lastIp: ip,
+          totalExecutes: 1,
+          mapName: mapName || null,
+          placeId:
+            placeId !== undefined && placeId !== null ? String(placeId) : null,
+          serverId: serverId || null,
+          gameId:
+            gameId !== undefined && gameId !== null ? String(gameId) : null,
+          allMapList: []
+        };
+
+        upsertMapHistory(entry, { mapName, placeId, serverId, gameId });
+        execUsers.push(entry);
+      } else {
+        // Update info terbaru
+        entry.username = username || entry.username;
+        entry.displayName = displayName || entry.displayName;
+        entry.lastExecuteAt = now;
+        entry.lastIp = ip;
+        entry.totalExecutes = (entry.totalExecutes || 0) + 1;
+
+        if (executorUse && executorUse !== '') {
+          entry.executorUse = executorUse;
+        }
+
+        if (execCountNum != null) {
+          entry.clientExecuteCount = execCountNum;
+        }
+
+        if (keyToken) {
+          entry.keyToken = keyToken;
+        }
+
+        if (createdAtStr) {
+          entry.keyCreatedAt = createdAtStr;
+        }
+
+        if (expiresAtStr) {
+          entry.keyExpiresAt = expiresAtStr;
+        }
+
+        if (mapName) {
+          entry.mapName = mapName;
+        }
+        if (placeId !== undefined && placeId !== null) {
+          entry.placeId = String(placeId);
+        }
+        if (serverId) {
+          entry.serverId = serverId;
+        }
+        if (gameId !== undefined && gameId !== null) {
+          entry.gameId = String(gameId);
+        }
+
+        if (!Array.isArray(entry.allMapList)) {
+          entry.allMapList = [];
+        }
+        upsertMapHistory(entry, { mapName, placeId, serverId, gameId });
       }
 
-      if (execCountNum != null) {
-        entry.clientExecuteCount = execCountNum;
-      }
-
-      if (keyToken) {
-        entry.keyToken = keyToken;
-      }
-
-      if (createdAtStr) {
-        entry.keyCreatedAt = createdAtStr;
-      }
-
-      if (expiresAtStr) {
-        entry.keyExpiresAt = expiresAtStr;
-      }
-
-      // last map / place / server / gameId
-      if (mapName) {
-        entry.mapName = mapName;
-      }
-      if (placeId !== undefined && placeId !== null) {
-        entry.placeId = String(placeId);
-      }
-      if (serverId) {
-        entry.serverId = serverId;
-      }
-      if (gameId !== undefined && gameId !== null) {
-        entry.gameId = String(gameId);
-      }
-
-      // REVISION: update riwayat map tanpa duplikasi
-      upsertMapHistory(entry, { mapName, placeId, serverId, gameId });
+      await saveExecUsers(execUsers);
     }
-
-    await saveExecUsers(execUsers);
 
     return res.json({
       ok: true,
@@ -1302,7 +1475,7 @@ app.post('/api/exec', async (req, res) => {
         mapName,
         placeId,
         serverId,
-        gameId // REVISION: ikut dikembalikan
+        gameId
       }
     });
   } catch (err) {
@@ -1640,12 +1813,21 @@ app.post('/admin/exec-users/delete', requireAdmin, async (req, res) => {
       return res.redirect(back);
     }
 
-    let list = await loadExecUsers();
-    const before = list.length;
-    list = list.filter((u) => u.key !== entryKey);
+    if (hasKV) {
+      try {
+        await kvSRem(KV_EXEC_INDEX_KEY, entryKey);
+        await kvDel(KV_EXEC_ENTRY_PREFIX + entryKey);
+      } catch (err) {
+        console.error('Failed to delete exec-user entry from KV:', err);
+      }
+    } else {
+      let list = await loadExecUsers();
+      const before = list.length;
+      list = list.filter((u) => u.key !== entryKey);
 
-    if (list.length !== before) {
-      await saveExecUsers(list);
+      if (list.length !== before) {
+        await saveExecUsers(list);
+      }
     }
 
     return res.redirect(back);
