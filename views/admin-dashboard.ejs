@@ -10,27 +10,23 @@
   <!-- Admin Dashboard: Responsive Layout & UX Upgrade (mobile + desktop) -->
   <style>
     /* ===========================
-       GLOBAL LAYOUT PROTECTION
-       (hindari scroll ke kanan)
+       GLOBAL LAYOUT (NO H-SCROLL)
        =========================== */
-
-    /* REVISION: pastikan tidak ada overflow horizontal di halaman */
     html,
     body {
       width: 100%;
       max-width: 100%;
-      overflow-x: hidden;
+      overflow-x: hidden;      /* tidak boleh ada horizontal scroll di halaman */
       margin: 0;
       padding: 0;
     }
 
-    /* REVISION: jaga body dark agar juga tidak overflow */
     body.page-dark {
       max-width: 100%;
       overflow-x: hidden;
     }
 
-    /* REVISION: container admin full-width tapi tetap center */
+    /* Container utama admin */
     .container.admin-dashboard {
       width: 100%;
       max-width: 1120px;
@@ -44,7 +40,7 @@
       display: flex;
       flex-direction: column;
       gap: 24px;
-      padding-bottom: 0; /* padding sudah di container */
+      padding-bottom: 0;
     }
 
     /* Section spacing */
@@ -59,7 +55,7 @@
       gap: 8px;
       margin: 8px 0 20px;
       padding-bottom: 4px;
-      overflow-x: auto;
+      overflow-x: auto; /* scroll H hanya di dalam nav, bukan halaman */
       scrollbar-width: thin;
       border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
     }
@@ -116,21 +112,39 @@
       width: 100%;
     }
 
-    /* Table scroll + kompak di mobile */
+    /* ===========================
+       TABLE LAYOUT: V-SCROLL ONLY
+       =========================== */
+
     .table-wrapper {
       width: 100%;
-      max-width: 100%;        /* REVISION: jangan lebih lebar dari container */
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
+      max-width: 100%;
+      overflow-x: visible;          /* tidak scroll horizontal di table wrapper */
     }
 
     .table.table-compact {
       width: 100%;
+      table-layout: fixed;          /* kolom dipaksa rata agar muat layar */
+      border-collapse: collapse;
     }
 
     .table.table-compact th,
     .table.table-compact td {
-      white-space: nowrap;
+      padding: 6px 8px;
+      white-space: normal;          /* IZINKAN WRAP */
+      word-wrap: break-word;
+      overflow-wrap: anywhere;      /* pecah kata panjang (HWID, key, dsb) */
+      vertical-align: top;
+    }
+
+    /* pastikan teks monospace panjang juga ikut wrap */
+    .mono {
+      word-wrap: break-word;
+      overflow-wrap: anywhere;
+    }
+
+    .hwid-cell {
+      max-width: 180px;
     }
 
     /* Script / raw file cards */
@@ -252,6 +266,15 @@
       background: rgba(148, 163, 184, 0.12);
       color: var(--text-muted, #9ca3c0);
       font-size: 0.75rem;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+    }
+
+    /* chip umum dari main.css – paksa wrap juga */
+    .chip,
+    .chip-copy {
+      max-width: 100%;
+      overflow-wrap: anywhere;
     }
 
     /* Field hint (ID, scriptFile, dll) */
@@ -289,6 +312,7 @@
       flex-wrap: wrap;
       gap: 8px;
       align-items: center;
+      max-width: 100%;
     }
 
     .raw-link-url {
@@ -302,6 +326,7 @@
       color: var(--accent-alt, #3cffd0);
       text-decoration: none;
       overflow-wrap: anywhere;
+      max-width: 100%;
     }
 
     .raw-link-url:hover {
@@ -323,7 +348,7 @@
       background: rgba(15, 23, 42, 0.9);
       border: 1px solid var(--border-subtle, rgba(255,255,255,0.08));
       color: var(--text-muted, #9ca3c0);
-      max-width: 160px;          /* REVISION: sedikit lebih kecil */
+      max-width: 100%;
       text-overflow: ellipsis;
       overflow: hidden;
       white-space: nowrap;
@@ -375,18 +400,15 @@
       }
     }
 
-    /* REVISION: optimasi tampilan tabel di layar kecil
-       - teks boleh wrap
-       - tetap tidak overflow ke kanan (body) */
+    /* MOBILE: perketat lagi agar aman di layar kecil */
     @media (max-width: 767.98px) {
       .table.table-compact th,
       .table.table-compact td {
-        white-space: normal;
-        word-wrap: break-word;
+        padding: 6px 6px;
+        font-size: 0.78rem;
       }
 
       .map-history-item {
-        max-width: 100%;
         white-space: normal;
       }
     }
