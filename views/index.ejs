@@ -97,7 +97,7 @@
               <button
                 class="btn-primary btn-small copy-loader-btn"
                 type="button"
-                data-loader='loadstring(game:HttpGet("https://excc-webs.vercel.app/api/script/<%= script.id %>", true))()'
+                data-script-id="<%= script.id %>"
               >
                 Copy Loader
               </button>
@@ -142,6 +142,21 @@
 </footer>
 
 <script>
+  // Helper: ambil base URL (origin) dengan fallback ke domain default
+  function getLoaderBaseUrl() {
+    try {
+      var origin = (window && window.location && window.location.origin) ? window.location.origin : '';
+      if (!origin || origin.indexOf('http') !== 0) {
+        origin = 'https://exc-webs.vercel.app';
+      }
+      // pastikan tanpa slash di akhir
+      origin = origin.replace(/\/+$/, '');
+      return origin;
+    } catch (e) {
+      return 'https://exc-webs.vercel.app';
+    }
+  }
+
   // Copy loader button
   (function () {
     const buttons = document.querySelectorAll('.copy-loader-btn');
@@ -179,8 +194,12 @@
 
     buttons.forEach(function (btn) {
       btn.addEventListener('click', function () {
-        const loader = btn.getAttribute('data-loader');
-        if (!loader) return;
+        const scriptId = btn.getAttribute('data-script-id');
+        if (!scriptId) return;
+
+        const baseUrl = getLoaderBaseUrl();
+        const loader = 'loadstring(game:HttpGet("' + baseUrl + '/api/script/' + scriptId + '", true))()';
+
         if (navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard
             .writeText(loader)
