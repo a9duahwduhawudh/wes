@@ -273,6 +273,27 @@
       border-color: var(--accent, #7bff3a);
     }
 
+    /* Map history chips (allMapList) */
+    .map-history {
+      margin-top: 4px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    .map-history-item {
+      font-size: 0.7rem;
+      border-radius: 999px;
+      padding: 2px 8px;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid var(--border-subtle, rgba(255,255,255,0.08));
+      color: var(--text-muted, #9ca3c0);
+      max-width: 180px;
+      text-overflow: ellipsis;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
     /* Breakpoints */
     @media (min-width: 640px) {
       .admin-search .search-row {
@@ -572,6 +593,7 @@
                 <th>HWID</th>
                 <th>Key</th>
                 <th>Exec</th>
+                <th>Maps</th>
                 <th>Last Exec</th>
                 <th>Actions</th>
               </tr>
@@ -651,6 +673,25 @@
                     <div class="table-main-text">
                       <%= item.totalExecutes || 0 %>
                     </div>
+                  </td>
+                  <td>
+                    <% 
+                      var mapsKC = Array.isArray(item.allMapList) ? item.allMapList : [];
+                      if (mapsKC.length) { 
+                    %>
+                      <div class="map-history">
+                        <% mapsKC.slice(0, 3).forEach(function(m) { 
+                             var label = m.mapName || (m.placeId ? ('Place ' + m.placeId) : (m.serverId || 'Unknown'));
+                        %>
+                          <span class="map-history-item"><%= label %></span>
+                        <% }); %>
+                        <% if (mapsKC.length > 3) { %>
+                          <span class="map-history-item">+<%= mapsKC.length - 3 %> more</span>
+                        <% } %>
+                      </div>
+                    <% } else { %>
+                      <div class="table-main-text">-</div>
+                    <% } %>
                   </td>
                   <td>
                     <div class="table-main-text">
@@ -810,6 +851,21 @@
                       <div class="table-sub-text">
                         PlaceId: <%= exec.placeId || '-' %>
                       </div>
+                      <%
+                        var mapsExec = Array.isArray(exec.allMapList) ? exec.allMapList : [];
+                        if (mapsExec.length) {
+                      %>
+                        <div class="map-history">
+                          <% mapsExec.slice(0, 3).forEach(function(m) {
+                               var label = m.mapName || (m.placeId ? ('Place ' + m.placeId) : (m.serverId || 'Unknown'));
+                          %>
+                            <span class="map-history-item"><%= label %></span>
+                          <% }); %>
+                          <% if (mapsExec.length > 3) { %>
+                            <span class="map-history-item">+<%= mapsExec.length - 3 %> more</span>
+                          <% } %>
+                        </div>
+                      <% } %>
                     </td>
                     <td>
                       <div class="table-main-text">
@@ -975,6 +1031,7 @@
                   <th>UserId</th>
                   <th>HWID</th>
                   <th>Exec</th>
+                  <th>Maps</th>
                   <th>Key</th>
                   <th>Last Exec</th>
                   <th>IP</th>
@@ -1032,6 +1089,25 @@
                       <div class="table-main-text">
                         <%= item.totalExecutes || 0 %>
                       </div>
+                    </td>
+                    <td>
+                      <%
+                        var mapsLU = Array.isArray(item.allMapList) ? item.allMapList : [];
+                        if (mapsLU.length) {
+                      %>
+                        <div class="map-history">
+                          <% mapsLU.slice(0, 3).forEach(function(m) {
+                               var label = m.mapName || (m.placeId ? ('Place ' + m.placeId) : (m.serverId || 'Unknown'));
+                          %>
+                            <span class="map-history-item"><%= label %></span>
+                          <% }); %>
+                          <% if (mapsLU.length > 3) { %>
+                            <span class="map-history-item">+<%= mapsLU.length - 3 %> more</span>
+                          <% } %>
+                        </div>
+                      <% } else { %>
+                        <div class="table-main-text">-</div>
+                      <% } %>
                     </td>
                     <td>
                       <% if (item.keyToken) { %>
