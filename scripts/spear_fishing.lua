@@ -273,7 +273,8 @@ local DEFAULT_OWNER_DISCORD  = "<@1403052152691101857>"
 local EXEC_FILE = KEY_FOLDER .. "/ExecCount.txt"
 
 -- API EXEC TRACKING CONFIG (UNTUK POST KE /api/exec)
-local EXEC_API_URL       = "https://exc-webs.vercel.app/api/exec"
+local BASE_API_URL     = "https://exc-webs.vercel.app/"
+local EXEC_API_URL     = BASE_API_URL .. "api/exec"
 local SCRIPT_ID_OVERRIDE = nil
 
 local function stringTrim(s)
