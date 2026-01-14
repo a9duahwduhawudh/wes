@@ -7,6 +7,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const cookieSession = require('cookie-session');
 const multer = require('multer');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -126,7 +127,7 @@ const KV_REDEEMED_KEY = 'exhub:redeemed-keys';
 // key KV untuk data tracking eksekusi user (format legacy: array besar)
 const KV_EXEC_USERS_KEY = 'exhub:exec-users';
 // format baru: per-entry + index
-const KV_EXEC_ENTRY_PREFIX = 'exhub:exec-user:';    // exhub:exec-user:<entryKey>
+const KV_EXEC_ENTRY_PREFIX = 'exhub:exec-user:'; // exhub:exec-user:<entryKey>
 const KV_EXEC_INDEX_KEY = 'exhub:exec-users:index'; // set berisi entryKey
 // prefix KV untuk body script
 const KV_SCRIPT_BODY_PREFIX = 'exhub:script-body:';
@@ -136,6 +137,16 @@ const RAW_FILES_PATH = path.join(__dirname, 'config', 'raw-files.json');
 const RAW_FILES_DIR = path.join(__dirname, 'private-raw');
 const KV_RAW_FILES_META_KEY = 'exhub:raw-files-meta';
 const KV_RAW_BODY_PREFIX = 'exhub:raw-body:';
+
+// prefix & config untuk Key System
+const KEYS_PATH = path.join(__dirname, 'config', 'keys.json');
+const KV_KEY_PREFIX = 'exhub:key:'; // exhub:key:<TOKEN>
+const KV_KEYS_INDEX_KEY = 'exhub:keys:index';
+const KV_KEYS_IP_PREFIX = 'exhub:keys-by-ip:'; // exhub:keys-by-ip:<IP>
+
+const KEY_TTL_SECONDS = parseInt(process.env.KEY_TTL_SECONDS || '3600', 10); // default 1 jam
+const KEY_TTL_MS = KEY_TTL_SECONDS * 1000;
+const KEY_MAX_PER_IP = parseInt(process.env.KEY_MAX_PER_IP || '10', 10);
 
 // ---- helper file lokal (fallback) ---------------------------------
 
@@ -211,6 +222,32 @@ function saveExecUsersToFile(list) {
     fs.writeFileSync(EXEC_USERS_PATH, JSON.stringify(list, null, 2), 'utf8');
   } catch (err) {
     console.error('Failed to save exec-users.json (file):', err);
+  }
+}
+
+// file helper untuk key (fallback lokal)
+
+function loadKeysFromFileStore() {
+  try {
+    if (!fs.existsSync(KEYS_PATH)) return [];
+    const raw = fs.readFileSync(KEYS_PATH, 'utf8');
+    if (!raw.trim()) return [];
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error('Failed to load keys.json (file):', err);
+    return [];
+  }
+}
+
+function saveKeysToFileStore(list) {
+  try {
+    const dir = path.dirname(KEYS_PATH);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(KEYS_PATH, JSON.stringify(list, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Failed to save keys.json (file):', err);
   }
 }
 
@@ -608,6 +645,91 @@ async function removeRawBody(rawId) {
   }
 }
 
+// ---- helper Key System (generate, load, validate) -----------------
+
+function generateKeyToken() {
+  if (typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return crypto.randomBytes(16).toString('hex');
+}
+
+async function loadKey(token) {
+  if (!token) return null;
+
+  if (hasKV) {
+    try {
+      const raw = await kvGet(KV_KEY_PREFIX + String(token));
+      if (raw && typeof raw === 'string' && raw.trim() !== '') {
+        const obj = JSON.parse(raw);
+        if (obj && typeof obj === 'object') return obj;
+      }
+    } catch (err) {
+      console.error('Failed to load key from KV:', err);
+    }
+  }
+
+  const all = loadKeysFromFileStore();
+  return all.find((k) => k.token === token) || null;
+}
+
+async function saveKey(keyData) {
+  if (!keyData || !keyData.token) return;
+
+  const token = String(keyData.token);
+
+  if (hasKV) {
+    try {
+      await kvSet(KV_KEY_PREFIX + token, JSON.stringify(keyData));
+      await kvSAdd(KV_KEYS_INDEX_KEY, token);
+      if (keyData.byIp) {
+        await kvSAdd(KV_KEYS_IP_PREFIX + String(keyData.byIp), token);
+      }
+    } catch (err) {
+      console.error('Failed to save key to KV:', err);
+    }
+  }
+
+  const all = loadKeysFromFileStore();
+  const idx = all.findIndex((k) => k.token === token);
+  if (idx >= 0) {
+    all[idx] = keyData;
+  } else {
+    all.push(keyData);
+  }
+  saveKeysToFileStore(all);
+}
+
+async function loadKeysByIp(ip) {
+  if (!ip) return [];
+
+  if (hasKV) {
+    try {
+      const members = await kvSMembers(KV_KEYS_IP_PREFIX + String(ip));
+      if (!Array.isArray(members) || members.length === 0) return [];
+      const out = [];
+      for (const token of members) {
+        if (!token) continue;
+        const keyObj = await loadKey(token);
+        if (keyObj) out.push(keyObj);
+      }
+      return out;
+    } catch (err) {
+      console.error('Failed to load keys by IP from KV:', err);
+    }
+  }
+
+  const all = loadKeysFromFileStore();
+  return all.filter((k) => k.byIp === ip);
+}
+
+async function softDeleteKey(token) {
+  const keyObj = await loadKey(token);
+  if (!keyObj) return;
+  keyObj.deleted = true;
+  await saveKey(keyObj);
+}
+
 // ---- stats helpers ------------------------------------------------
 
 function computeStats(scripts) {
@@ -739,8 +861,9 @@ async function buildAdminStats(period) {
         mapName: u.mapName || null,
         placeId: u.placeId || null,
         serverId: u.serverId || null,
-        gameId: u.gameId || null, // REVISION
-        allMapList: Array.isArray(u.allMapList) ? u.allMapList : [] // REVISION
+        gameId: u.gameId || null,
+        allMapList: Array.isArray(u.allMapList) ? u.allMapList : [],
+        extraFields: u.extraFields || null
       };
     });
 
@@ -831,11 +954,12 @@ async function buildAdminStats(period) {
         keyToken: u.keyToken || null,
         keyCreatedAt: u.keyCreatedAt || null,
         keyExpiresAt: u.keyExpiresAt || null,
-        mapName: u.mapName || null,           // REVISION
-        placeId: u.placeId || null,           // REVISION
-        serverId: u.serverId || null,         // REVISION
-        gameId: u.gameId || null,             // REVISION
-        allMapList: Array.isArray(u.allMapList) ? u.allMapList : [] // REVISION
+        mapName: u.mapName || null,
+        placeId: u.placeId || null,
+        serverId: u.serverId || null,
+        gameId: u.gameId || null,
+        allMapList: Array.isArray(u.allMapList) ? u.allMapList : [],
+        extraFields: u.extraFields || null
       };
     });
 
@@ -965,7 +1089,7 @@ app.get('/scripts', async (req, res) => {
   });
 });
 
-// Get Key page
+// Get Key page (manual redeem EXHUB-XXX-XXX-XXX)
 app.get('/get-key', (req, res) => {
   res.render('get-key', { result: null });
 });
@@ -1011,6 +1135,128 @@ app.post('/get-key/redeem', async (req, res) => {
   return res.render('get-key', {
     result: { status, message }
   });
+});
+
+// ===================================================================
+// New GetKey page (auto generate key + ads gate)
+// ===================================================================
+
+function formatDurationMs(ms) {
+  if (ms <= 0) return 'Expired';
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+app.get('/getkey', async (req, res) => {
+  const ip =
+    (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
+    req.socket.remoteAddress ||
+    '0.0.0.0';
+
+  const rawKeys = await loadKeysByIp(ip);
+  const now = Date.now();
+
+  const keys = rawKeys
+    .map((k) => {
+      const expiresAfter = k.expiresAfter || 0;
+      const diff = expiresAfter ? expiresAfter - now : 0;
+      const expired =
+        !!k.deleted || (expiresAfter !== 0 && diff <= 0);
+
+      const status = k.deleted
+        ? 'Deleted'
+        : expired
+        ? 'Expired'
+        : 'Active';
+
+      const timeLeftLabel = expiresAfter
+        ? expired
+          ? 'Expired'
+          : formatDurationMs(diff)
+        : '-';
+
+      return {
+        token: k.token,
+        createdAt: k.createdAt,
+        expiresAfter,
+        deleted: !!k.deleted,
+        status,
+        timeLeftLabel
+      };
+    })
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+  const errorCode = (req.query.error || '').trim();
+  let errorMessage = null;
+
+  if (errorCode === 'max') {
+    errorMessage = `Maksimal ${KEY_MAX_PER_IP} key aktif per IP. Tunggu key lama expired sebelum membuat key baru.`;
+  }
+
+  const adsUrl =
+    process.env.ADS_URL ||
+    'https://link-hub.net/2995260/0xLAgWUZzCns';
+
+  res.render('getkey', {
+    title: 'ExHub Key',
+    adsUrl,
+    keys,
+    maxKeys: KEY_MAX_PER_IP,
+    errorMessage
+  });
+});
+
+// Generate key baru
+app.post('/getkey/new', async (req, res) => {
+  try {
+    const ip =
+      (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
+      req.socket.remoteAddress ||
+      '0.0.0.0';
+
+    const userIdRaw = (req.body.userId || '').trim();
+    const userId =
+      userIdRaw && /^\d+$/.test(userIdRaw) ? Number(userIdRaw) : null;
+
+    const existingKeys = await loadKeysByIp(ip);
+    const now = Date.now();
+
+    const activeKeys = existingKeys.filter((k) => {
+      if (k.deleted) return false;
+      if (!k.expiresAfter) return true;
+      return k.expiresAfter > now;
+    });
+
+    if (activeKeys.length >= KEY_MAX_PER_IP) {
+      return res.redirect('/getkey?error=max');
+    }
+
+    const token = generateKeyToken();
+    const createdAt = now;
+    const expiresAfter = now + KEY_TTL_MS;
+
+    const keyData = {
+      token,
+      createdAt,
+      byIp: ip,
+      linkId: null,
+      userId: userId,
+      expiresAfter,
+      deleted: false
+    };
+
+    await saveKey(keyData);
+
+    return res.redirect('/getkey');
+  } catch (err) {
+    console.error('Failed to create new key:', err);
+    return res.redirect('/getkey?error=server');
+  }
 });
 
 // ===================================================================
@@ -1190,6 +1436,7 @@ function upsertMapHistory(entry, opts) {
 
 /**
  * Upsert 1 entry exec-user di KV (format baru).
+ * Menyimpan juga extraFields (key tambahan dari body /api/exec).
  */
 async function upsertExecUserKV(meta) {
   if (!hasKV) return null;
@@ -1209,7 +1456,8 @@ async function upsertExecUserKV(meta) {
     mapName,
     placeId,
     serverId,
-    gameId
+    gameId,
+    extraFields
   } = meta;
 
   const compositeKey = `${String(scriptId)}:${String(userId)}:${String(
@@ -1250,7 +1498,11 @@ async function upsertExecUserKV(meta) {
       serverId: serverId || null,
       gameId:
         gameId !== undefined && gameId !== null ? String(gameId) : null,
-      allMapList: []
+      allMapList: [],
+      extraFields:
+        extraFields && typeof extraFields === 'object'
+          ? { ...extraFields }
+          : {}
     };
   } else {
     entry.username = username || entry.username;
@@ -1279,6 +1531,14 @@ async function upsertExecUserKV(meta) {
     if (!Array.isArray(entry.allMapList)) {
       entry.allMapList = [];
     }
+
+    // merge extraFields baru ke existing
+    if (extraFields && typeof extraFields === 'object') {
+      entry.extraFields = entry.extraFields || {};
+      for (const [k, v] of Object.entries(extraFields)) {
+        entry.extraFields[k] = v;
+      }
+    }
   }
 
   // update riwayat map
@@ -1296,9 +1556,12 @@ async function upsertExecUserKV(meta) {
 
 /**
  * Endpoint yang dipanggil dari loader / script Roblox untuk melaporkan eksekusi.
+ * BODY bisa panjang (banyak key) → server simpan field inti + extraFields.
  */
 app.post('/api/exec', async (req, res) => {
   try {
+    const body = req.body || {};
+
     const {
       scriptId,
       userId,
@@ -1315,14 +1578,44 @@ app.post('/api/exec', async (req, res) => {
       mapName,
       placeId,
       serverId,
-      gameId // REVISION: terima gameId dari body
-    } = req.body || {};
+      gameId, // REVISION: terima gameId dari body
+      allMapList // LIST MAP RINGAN (server saat ini abaikan, tapi tetap dikirim)
+    } = body;
 
     if (!scriptId || !userId || !hwid) {
       return res.status(400).json({
         error: 'missing_fields',
         required: ['scriptId', 'userId', 'hwid']
       });
+    }
+
+    // daftar field inti yang diketahui server
+    const KNOWN_EXEC_KEYS = [
+      'scriptId',
+      'userId',
+      'username',
+      'displayName',
+      'hwid',
+      'executorUse',
+      'executeCount',
+      'clientExecuteCount',
+      'key',
+      'Key',
+      'createdAt',
+      'expiresAt',
+      'mapName',
+      'placeId',
+      'serverId',
+      'gameId',
+      'allMapList'
+    ];
+
+    // kumpulkan semua key lain (bisa panjang) ke extraFields
+    const extraFields = {};
+    for (const [k, v] of Object.entries(body)) {
+      if (!KNOWN_EXEC_KEYS.includes(k)) {
+        extraFields[k] = v;
+      }
     }
 
     // normalisasi executeCount (boleh kirim executeCount atau clientExecuteCount)
@@ -1369,7 +1662,8 @@ app.post('/api/exec', async (req, res) => {
         mapName,
         placeId,
         serverId,
-        gameId
+        gameId,
+        extraFields
       });
     } else {
       // Fallback local file (dev mode)
@@ -1404,7 +1698,11 @@ app.post('/api/exec', async (req, res) => {
           serverId: serverId || null,
           gameId:
             gameId !== undefined && gameId !== null ? String(gameId) : null,
-          allMapList: []
+          allMapList: [],
+          extraFields:
+            extraFields && typeof extraFields === 'object'
+              ? { ...extraFields }
+              : {}
         };
 
         upsertMapHistory(entry, { mapName, placeId, serverId, gameId });
@@ -1454,14 +1752,23 @@ app.post('/api/exec', async (req, res) => {
           entry.allMapList = [];
         }
         upsertMapHistory(entry, { mapName, placeId, serverId, gameId });
+
+        if (extraFields && typeof extraFields === 'object') {
+          entry.extraFields = entry.extraFields || {};
+          for (const [k, v] of Object.entries(extraFields)) {
+            entry.extraFields[k] = v;
+          }
+        }
       }
 
       await saveExecUsers(execUsers);
     }
 
+    // Response: kirim balik full body + normalized
     return res.json({
       ok: true,
-      received: {
+      received: body,
+      normalized: {
         scriptId,
         userId,
         username,
@@ -1495,6 +1802,75 @@ app.get('/api/exec', async (req, res) => {
   } catch (err) {
     console.error('Failed to load exec users (GET /api/exec):', err);
     return res.status(500).json({ error: 'exec_users_error' });
+  }
+});
+
+// ===================================================================
+// API Key Validation: /api/isValidate/:token
+// ===================================================================
+
+app.get('/api/isValidate/:token', async (req, res) => {
+  try {
+    const token = (req.params.token || '').trim();
+    if (!token) {
+      return res.status(400).json({
+        valid: false,
+        deleted: false,
+        info: null,
+        reason: 'missing_token'
+      });
+    }
+
+    const keyData = await loadKey(token);
+    if (!keyData) {
+      return res.json({
+        valid: false,
+        deleted: false,
+        info: null,
+        reason: 'not_found'
+      });
+    }
+
+    const now = Date.now();
+    const expiresAfter =
+      keyData.expiresAfter !== undefined && keyData.expiresAfter !== null
+        ? Number(keyData.expiresAfter)
+        : null;
+
+    const expired =
+      expiresAfter !== null &&
+      Number.isFinite(expiresAfter) &&
+      now > expiresAfter;
+    const deleted = !!keyData.deleted;
+    const valid = !expired && !deleted;
+
+    return res.json({
+      valid,
+      deleted,
+      info: {
+        token: keyData.token,
+        createdAt: keyData.createdAt,
+        byIp: keyData.byIp || '0.0.0.0',
+        linkId:
+          keyData.linkId !== undefined && keyData.linkId !== null
+            ? keyData.linkId
+            : null,
+        userId:
+          keyData.userId !== undefined && keyData.userId !== null
+            ? keyData.userId
+            : null,
+        expiresAfter: expiresAfter
+      },
+      reason: expired ? 'expired' : deleted ? 'deleted' : 'ok'
+    });
+  } catch (err) {
+    console.error('Failed to handle /api/isValidate:', err);
+    return res.status(500).json({
+      valid: false,
+      deleted: false,
+      info: null,
+      reason: 'server_error'
+    });
   }
 });
 
@@ -1966,7 +2342,7 @@ app.post(
   upload.single('rawUpload'),
   async (req, res) => {
     const id = (req.params.id || '').trim();
-    if (!id) return res.redirect('/admin#raw-files');
+       if (!id) return res.redirect('/admin#raw-files');
 
     let rawFiles = await loadRawFiles();
     const idx = rawFiles.findIndex((f) => f.id === id);
