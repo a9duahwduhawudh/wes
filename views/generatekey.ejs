@@ -28,7 +28,7 @@
           </p>
         </div>
 
-        <% 
+        <%
           // ======== HEADER STATE / PROGRESS ========
           var _headerState = (typeof headerState !== 'undefined' && headerState) ? headerState : 'start';
           var _timerLabel  = (typeof headerTimerLabel !== 'undefined' && headerTimerLabel) ? headerTimerLabel : null;
@@ -61,7 +61,7 @@
           var newKeyAction = (typeof keyAction !== 'undefined' && keyAction) ? keyAction : '/getkey/new';
           var canGenerate  = (typeof allowGenerate === 'boolean') ? allowGenerate : true;
 
-          // ======== RENEW ACTION (jaga-jaga kalau mau dipakai di masa depan) ========
+          // ======== RENEW ACTION (pakai endpoint /getkey/renew) ========
           var renewAction  = (typeof renewAction !== 'undefined' && renewAction) ? renewAction : '/getkey/renew';
         %>
 
@@ -127,10 +127,10 @@
           <li>
             After redirect, you should land on:
             <code>
-              <% 
+              <%
                 var finalBase = (typeof baseUrl !== 'undefined' && baseUrl) ? baseUrl : '';
                 var finalHost = (typeof requestHost !== 'undefined' && requestHost) ? requestHost : '';
-                if (finalBase) { 
+                if (finalBase) {
               %>
                 <%= finalBase + '/generatekey' %>
               <% } else if (finalHost) { %>
@@ -214,7 +214,6 @@
                     } else if (k && typeof k.expiresAfter !== 'undefined' && k.expiresAfter !== null) {
                       expireTs = parseInt(k.expiresAfter, 10);
                     } else if (k && typeof k.expiresAt !== 'undefined' && k.expiresAt !== null) {
-                      // kalau server kirim ts langsung (number) via expiresAt:
                       var tmp = parseInt(k.expiresAt, 10);
                       if (!isNaN(tmp)) expireTs = tmp;
                     }
@@ -226,6 +225,10 @@
                         : statusLabel === 'Expired'
                         ? 'badge-muted'
                         : 'badge-danger';
+
+                    // Gate Renew di sisi view:
+                    // hanya muncul kalau status Expired DAN allowGenerate (canGenerate) true.
+                    var canShowRenew = (statusLabel === 'Expired' && canGenerate);
                   %>
                   <tr
                     class="key-row"
@@ -264,7 +267,7 @@
                           method="POST"
                           class="key-renew-form"
                           data-renew-form="1"
-                          style="<%= statusLabel === 'Expired' ? 'display:inline-flex; margin-left:6px;' : 'display:none; margin-left:6px;' %>"
+                          style="<%= canShowRenew ? 'display:inline-flex; margin-left:6px;' : 'display:none; margin-left:6px;' %>"
                         >
                           <input type="hidden" name="token" value="<%= k.token %>" />
                           <% if (typeof currentUserId !== 'undefined' && currentUserId) { %>
@@ -273,6 +276,7 @@
                           <button
                             type="submit"
                             class="key-btn key-btn-xs key-btn-ghost"
+                            <%= canGenerate ? '' : 'disabled="disabled" aria-disabled="true"' %>
                           >
                             Renew
                           </button>
@@ -397,6 +401,9 @@
       var rows = table.querySelectorAll('tbody tr.key-row');
       if (!rows || !rows.length) return;
 
+      // Inject flag dari server: apakah sesi ini boleh generate/renew?
+      var CAN_GENERATE = <%= canGenerate ? 'true' : 'false' %>;
+
       function formatRemaining(ms) {
         if (!isFinite(ms)) return '-';
         if (ms <= 0) return 'Expired';
@@ -435,6 +442,7 @@
           var renewForm   = row.querySelector('form[data-renew-form="1"]');
 
           if (diff <= 0) {
+            // Sudah expired (atau lewat)
             if (statusBadge && !statusBadge.dataset.expiredSet) {
               statusBadge.textContent = 'Expired';
               statusBadge.classList.remove('badge-success');
@@ -443,6 +451,16 @@
               statusBadge.dataset.expiredSet = '1';
             }
 
+            // Gate Renew di sisi client:
+            // kalau CAN_GENERATE = false → jangan tampilkan Renew walaupun expired.
+            if (!CAN_GENERATE) {
+              if (renewForm) {
+                renewForm.style.display = 'none';
+              }
+              return;
+            }
+
+            // Kalau boleh generate & expired → tampilkan Renew
             if (renewForm && renewForm.style.display === 'none') {
               renewForm.style.display = 'inline-flex';
             }
@@ -450,6 +468,7 @@
         });
       }
 
+      // Initial run + interval
       tick();
       setInterval(tick, 1000);
     })();
