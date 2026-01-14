@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title><%= title || 'Admin – Web Key Manager' %></title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <link rel="icon" type="image/png" href="/img/ExLogo2.png" />
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body class="page-dark">
+  <div class="admin-page admin-keys-page">
+    <div class="admin-shell">
+      <!-- ================= HEADER ================= -->
+      <header class="admin-header">
+        <div class="admin-header-main">
+          <h1 class="admin-title">Admin – Web Key Manager</h1>
+          <p class="admin-subtitle">
+            Monitor IP & tokens dari sistem <strong>Generate Key</strong>.
+            Anda dapat menghapus semua token untuk 1 IP, menghapus token tertentu,
+            dan mengubah <code>createdAt</code> / <code>expiresAt</code> secara manual.
+          </p>
+        </div>
+
+        <div class="admin-header-stats">
+          <div class="admin-stat-pill">
+            <span class="admin-stat-label">Total IP</span>
+            <span class="admin-stat-value"><%= totalIpCount || 0 %></span>
+          </div>
+          <div class="admin-stat-pill">
+            <span class="admin-stat-label">Total Keys</span>
+            <span class="admin-stat-value"><%= totalKeysCount || 0 %></span>
+          </div>
+          <div class="admin-stat-pill">
+            <span class="admin-stat-label">Active Keys</span>
+            <span class="admin-stat-value"><%= activeKeysCount || 0 %></span>
+          </div>
+          <div class="admin-stat-pill admin-stat-pill-soft">
+            <span class="admin-stat-label">Default Expiry</span>
+            <span class="admin-stat-value">
+              <%= (typeof defaultKeyHours !== 'undefined' ? defaultKeyHours : 24) %>h
+            </span>
+          </div>
+        </div>
+
+        <!-- Search / filter bar -->
+        <form
+          action="/admin/keys"
+          method="GET"
+          class="admin-search-form"
+          autocomplete="off"
+        >
+          <div class="admin-search-field">
+            <input
+              type="text"
+              name="q"
+              class="admin-input"
+              placeholder="Cari IP / token / Roblox UserId..."
+              value="<%= query || '' %>"
+              autocomplete="off"
+            />
+          </div>
+          <button type="submit" class="admin-btn admin-btn-ghost">
+            Search
+          </button>
+
+          <% if (query) { %>
+            <a href="/admin/keys" class="admin-btn admin-btn-outline">
+              Clear
+            </a>
+          <% } %>
+        </form>
+      </header>
+
+      <!-- ================= GRID BODY (IP OVERVIEW + DETAIL) ================= -->
+      <main class="admin-body admin-keys-grid">
+        <!-- ========== IP OVERVIEW (LEFT / TOP ON MOBILE) ========== -->
+        <section class="admin-card admin-card-ip-list">
+          <div class="admin-card-header">
+            <div>
+              <h2 class="admin-card-title">IP Overview</h2>
+              <p class="admin-card-subtitle">
+                Daftar IP yang pernah mendapatkan key. Klik <strong>Manage</strong> untuk lihat detail & tokens IP tersebut.
+              </p>
+            </div>
+          </div>
+
+          <% if (ipStats && ipStats.length > 0) { %>
+            <div class="admin-table-wrapper">
+              <table class="admin-table admin-table-ip">
+                <thead>
+                  <tr>
+                    <th>IP Address</th>
+                    <th>Total Keys</th>
+                    <th>Active</th>
+                    <th>Last Created</th>
+                    <th>Last Expires</th>
+                    <th class="admin-col-actions">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <% ipStats.forEach(function(row) { %>
+                    <tr
+                      class="<%= selectedIp && selectedIp === row.ip ? 'admin-row-selected' : '' %>"
+                    >
+                      <td><code><%= row.ip %></code></td>
+                      <td><%= row.totalKeys || 0 %></td>
+                      <td><%= row.activeKeys || 0 %></td>
+                      <td><%= row.lastCreatedAt || '-' %></td>
+                      <td><%= row.lastExpiresAt || '-' %></td>
+                      <td class="admin-cell-actions">
+                        <a
+                          href="/admin/keys?ip=<%= encodeURIComponent(row.ip) %>"
+                          class="admin-btn admin-btn-xs admin-btn-outline"
+                        >
+                          Manage
+                        </a>
+                      </td>
+                    </tr>
+                  <% }); %>
+                </tbody>
+              </table>
+            </div>
+          <% } else { %>
+            <div class="admin-empty">
+              <p>
+                Belum ada data <strong>web-keys</strong> atau tidak ada IP yang cocok dengan filter pencarian.
+              </p>
+            </div>
+          <% } %>
+        </section>
+
+        <!-- ========== SELECTED IP DETAIL (RIGHT / BOTTOM ON MOBILE) ========== -->
+        <section class="admin-card admin-card-ip-detail">
+          <div class="admin-card-header">
+            <div>
+              <h2 class="admin-card-title">
+                IP Detail
+                <% if (selectedIp) { %>
+                  — <code><%= selectedIp %></code>
+                <% } else { %>
+                  (select IP)
+                <% } %>
+              </h2>
+              <p class="admin-card-subtitle">
+                Lihat semua token untuk IP tertentu, ubah <code>createdAt</code> / <code>expiresAt</code>,
+                dan hapus token yang tidak diinginkan.
+              </p>
+            </div>
+
+            <% if (selectedIp) { %>
+              <form
+                action="/admin/keys/delete-ip"
+                method="POST"
+                class="admin-inline-form"
+                onsubmit="return confirm('Delete ALL keys for IP <%= selectedIp %>?');"
+              >
+                <input type="hidden" name="ip" value="<%= selectedIp %>" />
+                <button type="submit" class="admin-btn admin-btn-danger">
+                  Delete IP &amp; All Keys
+                </button>
+              </form>
+            <% } %>
+          </div>
+
+          <% if (!selectedIp) { %>
+            <div class="admin-empty">
+              <p>Pilih IP dari tabel <strong>IP Overview</strong> untuk melihat detail token.</p>
+            </div>
+          <% } else if (!selectedKeys || selectedKeys.length === 0) { %>
+            <div class="admin-empty">
+              <p>Tidak ada token yang tercatat untuk IP ini (kemungkinan semua sudah expired & terhapus).</p>
+            </div>
+          <% } else { %>
+            <div class="admin-table-wrapper">
+              <table class="admin-table admin-table-keys">
+                <thead>
+                  <tr>
+                    <th>Token</th>
+                    <th>UserId</th>
+                    <th>Created / Expires</th>
+                    <th>Status</th>
+                    <th class="admin-col-actions">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <% selectedKeys.forEach(function(k) { %>
+                    <tr id="token-<%= encodeURIComponent(k.token) %>">
+                      <td class="admin-cell-token">
+                        <code class="admin-token"><%= k.token %></code>
+                      </td>
+                      <td>
+                        <% if (k.userId) { %>
+                          <code><%= k.userId %></code>
+                        <% } else { %>
+                          <span class="admin-muted">-</span>
+                        <% } %>
+                      </td>
+                      <td>
+                        <form
+                          action="/admin/keys/update-key"
+                          method="POST"
+                          class="admin-key-inline-form"
+                        >
+                          <input type="hidden" name="token" value="<%= k.token %>" />
+                          <input type="hidden" name="ip" value="<%= selectedIp %>" />
+
+                          <div class="admin-key-field">
+                            <label class="admin-key-label">createdAt</label>
+                            <input
+                              type="text"
+                              name="createdAt"
+                              class="admin-input admin-input-compact"
+                              value="<%= k.createdAt %>"
+                              placeholder="ISO or timestamp"
+                              autocomplete="off"
+                            />
+                            <div class="admin-key-hint">
+                              <span class="admin-muted">
+                                <%= k.createdAtLabel || '-' %>
+                              </span>
+                            </div>
+                          </div>
+
+                          <div class="admin-key-field">
+                            <label class="admin-key-label">expiresAt</label>
+                            <input
+                              type="text"
+                              name="expiresAt"
+                              class="admin-input admin-input-compact"
+                              value="<%= k.expiresAt %>"
+                              placeholder="ISO / timestamp / empty = auto"
+                              autocomplete="off"
+                            />
+                            <div class="admin-key-hint">
+                              <span class="admin-muted">
+                                <%= k.expiresAtLabel || '-' %>
+                              </span>
+                            </div>
+                          </div>
+
+                          <button type="submit" class="admin-btn admin-btn-xs admin-btn-primary">
+                            Save
+                          </button>
+                        </form>
+                      </td>
+                      <td>
+                        <%
+                          var statusLabel = k.status || 'Active';
+                          var badgeClass =
+                            statusLabel === 'Active'
+                              ? 'badge-success'
+                              : statusLabel === 'Expired'
+                              ? 'badge-muted'
+                              : 'badge-danger';
+                        %>
+                        <span class="badge <%= badgeClass %>"><%= statusLabel %></span>
+                        <div class="admin-key-timeleft">
+                          <span class="admin-muted">
+                            Time left: <%= k.timeLeftLabel || '-' %>
+                          </span>
+                        </div>
+                      </td>
+                      <td class="admin-cell-actions">
+                        <form
+                          action="/admin/keys/delete-key"
+                          method="POST"
+                          class="admin-inline-form"
+                          onsubmit="return confirm('Delete this key?');"
+                        >
+                          <input type="hidden" name="token" value="<%= k.token %>" />
+                          <input type="hidden" name="ip" value="<%= selectedIp %>" />
+                          <button
+                            type="submit"
+                            class="admin-btn admin-btn-xs admin-btn-outline-danger"
+                          >
+                            Delete
+                          </button>
+                        </form>
+                      </td>
+                    </tr>
+                  <% }); %>
+                </tbody>
+              </table>
+            </div>
+          <% } %>
+        </section>
+      </main>
+    </div>
+  </div>
+</body>
+</html>
