@@ -158,10 +158,9 @@ const GENERATEKEY_ADS_URL =
   process.env.GENERATEKEY_ADS_URL ||
   'https://linkvertise.com/2995260/0xLAgWUZzCns?o=sharing';
 
-// Durasi minimal dan maksimal (window) user berada di iklan (detik)
-const MIN_AD_SECONDS = parseInt(process.env.MIN_AD_SECONDS || '15', 10);
-const MAX_AD_WINDOW_SECONDS = parseInt(
-  process.env.MAX_AD_WINDOW_SECONDS || '600',
+// Maksimal umur checkpoint Start → Ads (default 10 menit = 600000 ms)
+const ADS_CHECKPOINT_MAX_AGE_MS = parseInt(
+  process.env.ADS_CHECKPOINT_MAX_AGE_MS || '600000',
   10
 );
 
@@ -931,8 +930,8 @@ async function buildAdminStats(period) {
         mapName: u.mapName || null,
         placeId: u.placeId || null,
         serverId: u.serverId || null,
-        gameId: u.gameId || null, // REVISION
-        allMapList: Array.isArray(u.allMapList) ? u.allMapList : [] // REVISION
+        gameId: u.gameId || null,
+        allMapList: Array.isArray(u.allMapList) ? u.allMapList : []
       };
     });
 
@@ -1023,11 +1022,11 @@ async function buildAdminStats(period) {
         keyToken: u.keyToken || null,
         keyCreatedAt: u.keyCreatedAt || null,
         keyExpiresAt: u.keyExpiresAt || null,
-        mapName: u.mapName || null, // REVISION
-        placeId: u.placeId || null, // REVISION
-        serverId: u.serverId || null, // REVISION
-        gameId: u.gameId || null, // REVISION
-        allMapList: Array.isArray(u.allMapList) ? u.allMapList : [] // REVISION
+        mapName: u.mapName || null,
+        placeId: u.placeId || null,
+        serverId: u.serverId || null,
+        gameId: u.gameId || null,
+        allMapList: Array.isArray(u.allMapList) ? u.allMapList : []
       };
     });
 
@@ -1161,15 +1160,36 @@ app.get('/scripts', async (req, res) => {
 // Generate Key PAGE (Luarmor-style, strict checkpoint per 1 key)
 // ===================================================================
 
-// Step 1: user klik Start → catat waktu & userId, lalu redirect ke Linkvertise
-app.get('/generatekey/start', (req, res) => {
-  const currentUserId = (req.query.userId || '').trim();
+// Step 1: user klik Start → catat checkpoint & userId, lalu redirect ke Linkvertise
+app.get('/generatekey/ads-start', async (req, res) => {
+  try {
+    const ip =
+      (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
+      req.socket.remoteAddress ||
+      'unknown';
 
-  req.session.adsStartAt = Date.now();
-  req.session.adsStartUsed = false;
-  req.session.adsUserId = currentUserId || null;
+    const currentUserId = (req.query.userId || '').trim() || null;
+    const now = Date.now();
 
-  return res.redirect(GENERATEKEY_ADS_URL);
+    // Simpan checkpoint di session (akan dicek saat balik ke ?done=1)
+    req.session.adsCheckpoint = {
+      startedAt: now,
+      ip,
+      userId: currentUserId
+    };
+
+    return res.redirect(GENERATEKEY_ADS_URL);
+  } catch (err) {
+    console.error('Failed to handle /generatekey/ads-start:', err);
+    const parts = [
+      'errorMessage=' +
+        encodeURIComponent('Failed to start ads step. Please try again.')
+    ];
+    const uid = (req.query.userId || '').trim();
+    if (uid) parts.push('userId=' + encodeURIComponent(uid));
+    const qs = '?' + parts.join('&');
+    return res.redirect('/generatekey' + qs);
+  }
 });
 
 app.get('/generatekey', async (req, res) => {
@@ -1182,9 +1202,7 @@ app.get('/generatekey', async (req, res) => {
       req.socket.remoteAddress ||
       'unknown';
 
-    const qUserId = (req.query.userId || '').trim();
-    const sessionUserId = (req.session.adsUserId || '').trim();
-    const currentUserId = qUserId || sessionUserId;
+    const currentUserId = (req.query.userId || '').trim();
 
     const siteConfig = await loadSiteConfig();
     const defaultKeyHours =
@@ -1196,6 +1214,7 @@ app.get('/generatekey', async (req, res) => {
         ? siteConfig.maxKeysPerIp
         : MAX_KEYS_PER_IP;
 
+    // ===== Load & GC web-keys (Generate Key) =====
     let webKeys = await loadWebKeys();
     const nowMs = Date.now();
 
@@ -1246,11 +1265,20 @@ app.get('/generatekey', async (req, res) => {
       }
     }
 
-    // ================== CHECKPOINT IKLAN + SANITIZE QUERY ==================
+    // ================== BUILD URL START (selalu lewat /generatekey/ads-start) ==================
+
+    const adsParams = [];
+    if (currentUserId) {
+      adsParams.push('userId=' + encodeURIComponent(currentUserId));
+    }
+    const adsQs = adsParams.length ? '?' + adsParams.join('&') : '';
+    const adsStartUrl = '/generatekey/ads-start' + adsQs;
+
+    // ================== CHECKPOINT IKLAN + VALIDASI ==================
 
     let allowGenerate = true;
     let headerState = 'start';
-    let headerTimerLabel = null;
+    const headerTimerLabel = null;
 
     if (REQUIRE_ADS_CHECKPOINT) {
       const fromAds =
@@ -1260,38 +1288,38 @@ app.get('/generatekey', async (req, res) => {
         req.query.ads === '1';
 
       if (fromAds) {
+        const cp = req.session.adsCheckpoint || null;
         const now = Date.now();
-        const startedAt = req.session.adsStartAt || 0;
-        const startedUsed = !!req.session.adsStartUsed;
+        let checkpointValid = false;
 
-        const elapsed = startedAt ? now - startedAt : 0;
-        const MIN_AD_MS = MIN_AD_SECONDS * 1000;
-        const MAX_AD_WINDOW_MS = MAX_AD_WINDOW_SECONDS * 1000;
-
-        const withinWindow =
-          startedAt &&
-          elapsed >= MIN_AD_MS &&
-          elapsed <= MAX_AD_WINDOW_MS;
-
-        const referer = (req.headers.referer || '').toLowerCase();
-        const refererOk = referer.includes('linkvertise.com');
-
-        if (withinWindow && !startedUsed && refererOk) {
-          req.session.generateKeyAdsOk = true;
-          req.session.adsStartUsed = true;
-        } else {
-          // Percobaan tidak valid → reset status checkpoint
-          req.session.generateKeyAdsOk = false;
-          req.session.adsStartAt = null;
-          req.session.adsStartUsed = false;
+        if (cp && typeof cp.startedAt === 'number') {
+          const age = now - cp.startedAt;
+          if (age >= 0 && age <= ADS_CHECKPOINT_MAX_AGE_MS) {
+            checkpointValid = true;
+          }
         }
 
-        // Selalu redirect ke URL bersih tanpa ?done=1
+        if (!checkpointValid) {
+          const params = [
+            'errorMessage=' +
+              encodeURIComponent(
+                'Checkpoint expired or invalid. Please click Start again from ExHub page.'
+              )
+          ];
+          if (currentUserId) {
+            params.push('userId=' + encodeURIComponent(currentUserId));
+          }
+          const qs = '?' + params.join('&');
+          return res.redirect('/generatekey' + qs);
+        }
+
+        // checkpoint valid → unlock generateKey sekali
+        req.session.generateKeyAdsOk = true;
+        req.session.adsCheckpoint = null;
+
         const params = [];
-        const effectiveUserId =
-          currentUserId || (req.session.adsUserId || '');
-        if (effectiveUserId) {
-          params.push('userId=' + encodeURIComponent(effectiveUserId));
+        if (currentUserId) {
+          params.push('userId=' + encodeURIComponent(currentUserId));
         }
         const qs = params.length ? '?' + params.join('&') : '';
         return res.redirect('/generatekey' + qs);
@@ -1301,8 +1329,7 @@ app.get('/generatekey', async (req, res) => {
       allowGenerate = sessionOk;
       headerState = sessionOk ? 'done' : 'start';
     } else {
-      // Kalau checkpoint tidak dipakai, tombol Get A New Key selalu aktif
-      // dan progress penuh (1/1)
+      // tanpa checkpoint → langsung boleh generate
       allowGenerate = true;
       headerState = 'done';
     }
@@ -1311,7 +1338,7 @@ app.get('/generatekey', async (req, res) => {
       title: 'ExHub - Generate Key',
       keys: myKeys,
       maxKeys: maxKeysPerIp,
-      adsUrl: GENERATEKEY_ADS_URL,
+      adsUrl: adsStartUrl, // penting: sekarang ke /generatekey/ads-start
       errorMessage: (req.query.errorMessage || '').trim() || null,
       defaultKeyHours,
       headerState,
@@ -1343,7 +1370,7 @@ app.get('/generatekey', async (req, res) => {
       title: 'ExHub - Generate Key',
       keys: [],
       maxKeys,
-      adsUrl: GENERATEKEY_ADS_URL,
+      adsUrl: '/generatekey/ads-start',
       errorMessage: 'Internal server error.',
       defaultKeyHours,
       headerState: 'start',
@@ -1470,8 +1497,7 @@ app.post('/getkey/new', async (req, res) => {
     // sehingga untuk key ke-2 wajib klik Start & selesaikan iklan lagi.
     if (REQUIRE_ADS_CHECKPOINT) {
       req.session.generateKeyAdsOk = false;
-      req.session.adsStartAt = null;
-      req.session.adsStartUsed = false;
+      req.session.adsCheckpoint = null;
     }
 
     const params = [];
@@ -1842,7 +1868,7 @@ app.post('/api/exec', async (req, res) => {
       mapName,
       placeId,
       serverId,
-      gameId // REVISION: terima gameId dari body
+      gameId
     } = req.body || {};
 
     if (!scriptId || !userId || !hwid) {
