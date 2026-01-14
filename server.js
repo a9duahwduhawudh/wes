@@ -1102,6 +1102,132 @@ async function incrementCountersKV(script, req) {
 }
 
 // ===================================================================
+// Admin – Web Key Manager (helper build data)
+// ===================================================================
+
+async function buildWebKeysAdminData() {
+  const siteConfig = await loadSiteConfig();
+  const defaultKeyHours =
+    typeof siteConfig.defaultKeyHours === 'number'
+      ? siteConfig.defaultKeyHours
+      : DEFAULT_KEY_HOURS;
+  const maxKeysPerIp =
+    typeof siteConfig.maxKeysPerIp === 'number'
+      ? siteConfig.maxKeysPerIp
+      : MAX_KEYS_PER_IP;
+
+  const webKeys = await loadWebKeys();
+  const nowMs = Date.now();
+
+  const ipMap = new Map();
+
+  for (const k of webKeys) {
+    if (!k || !k.token) continue;
+    const ip = (k.ip || 'unknown').trim() || 'unknown';
+    if (!ipMap.has(ip)) ipMap.set(ip, []);
+    ipMap.get(ip).push(k);
+  }
+
+  function parseMs(value) {
+    if (!value) return 0;
+    const t = Date.parse(value);
+    return Number.isNaN(t) ? 0 : t;
+  }
+
+  function computeExpiresMs(entry, createdMs) {
+    let expiresMs = null;
+    if (entry.expiresAt) {
+      const t = Date.parse(entry.expiresAt);
+      if (!Number.isNaN(t)) {
+        expiresMs = t;
+      }
+    }
+    if (!expiresMs && createdMs && defaultKeyHours > 0) {
+      expiresMs = createdMs + defaultKeyHours * 60 * 60 * 1000;
+    }
+    return expiresMs;
+  }
+
+  const ipStats = [];
+  const ipDetails = new Map();
+
+  let totalKeys = 0;
+  let activeKeys = 0;
+
+  ipMap.forEach((entries, ip) => {
+    let total = 0;
+    let active = 0;
+    let lastCreatedMs = 0;
+    let lastExpiresMs = 0;
+
+    const detailList = [];
+
+    for (const entry of entries) {
+      total += 1;
+      totalKeys += 1;
+
+      const createdMs = parseMs(entry.createdAt || '');
+      const expiresMs = computeExpiresMs(entry, createdMs);
+
+      const expired = !!(expiresMs && expiresMs <= nowMs);
+      if (!expired) {
+        active += 1;
+        activeKeys += 1;
+      }
+
+      if (createdMs > lastCreatedMs) lastCreatedMs = createdMs;
+      if (expiresMs && expiresMs > lastExpiresMs) lastExpiresMs = expiresMs;
+
+      const diff = expiresMs ? expiresMs - nowMs : null;
+      const timeLeftLabel =
+        expiresMs && !expired ? formatTimeLeft(diff) : 'Expired';
+
+      detailList.push({
+        token: entry.token,
+        ip,
+        userId: entry.userId || null,
+        createdAt: entry.createdAt || '',
+        expiresAt: entry.expiresAt || '',
+        createdAtLabel: createdMs
+          ? new Date(createdMs).toLocaleString('id-ID')
+          : '-',
+        expiresAtLabel: expiresMs
+          ? new Date(expiresMs).toLocaleString('id-ID')
+          : '-',
+        timeLeftLabel,
+        status: expired ? 'Expired' : 'Active'
+      });
+    }
+
+    ipDetails.set(ip, detailList);
+
+    ipStats.push({
+      ip,
+      totalKeys: total,
+      activeKeys: active,
+      lastCreatedAt:
+        lastCreatedMs > 0
+          ? new Date(lastCreatedMs).toLocaleString('id-ID')
+          : '-',
+      lastExpiresAt:
+        lastExpiresMs > 0
+          ? new Date(lastExpiresMs).toLocaleString('id-ID')
+          : '-'
+    });
+  });
+
+  return {
+    ipStats,
+    ipDetails,
+    totalIpCount: ipStats.length,
+    totalKeysCount: totalKeys,
+    activeKeysCount: activeKeys,
+    defaultKeyHours,
+    maxKeysPerIp
+  };
+}
+
+// ===================================================================
 // View engine & static files
 // ===================================================================
 
@@ -2771,6 +2897,181 @@ app.post(
     return res.redirect('/admin#raw-files');
   }
 );
+
+// ===================================================================
+// Admin – Web Key Manager (monitor IP & tokens)
+// ===================================================================
+
+// Dashboard Key Manager
+app.get('/admin/keys', requireAdmin, async (req, res) => {
+  try {
+    const selectedIp = (req.query.ip || '').trim();
+    const queryRaw = (req.query.q || '').trim();
+    const query = queryRaw.toLowerCase();
+
+    const {
+      ipStats,
+      ipDetails,
+      totalIpCount,
+      totalKeysCount,
+      activeKeysCount,
+      defaultKeyHours,
+      maxKeysPerIp
+    } = await buildWebKeysAdminData();
+
+    let filteredIpStats = ipStats;
+
+    if (query) {
+      // Filter IP yang mengandung query (atau ada token/userId yang match)
+      const matchIp = new Set();
+
+      // Cek IP langsung
+      ipStats.forEach((row) => {
+        if (row.ip.toLowerCase().includes(query)) {
+          matchIp.add(row.ip);
+        }
+      });
+
+      // Cek token/userId
+      ipDetails.forEach((list, ip) => {
+        if (matchIp.has(ip)) return;
+        const hit = list.some((k) => {
+          const token = (k.token || '').toLowerCase();
+          const uidStr = k.userId != null ? String(k.userId) : '';
+          return (
+            token.includes(query) ||
+            uidStr.includes(queryRaw) // userId numeric
+          );
+        });
+        if (hit) matchIp.add(ip);
+      });
+
+      filteredIpStats = ipStats.filter((row) => matchIp.has(row.ip));
+    }
+
+    let selectedKeys = [];
+    if (selectedIp && ipDetails.has(selectedIp)) {
+      selectedKeys = ipDetails.get(selectedIp) || [];
+    }
+
+    return res.render('admin-dashboardkey', {
+      title: 'Admin – Web Key Manager',
+      query: queryRaw,
+      ipStats: filteredIpStats,
+      selectedIp,
+      selectedKeys,
+      totalIpCount,
+      totalKeysCount,
+      activeKeysCount,
+      defaultKeyHours,
+      maxKeysPerIp
+    });
+  } catch (err) {
+    console.error('Error rendering /admin/keys:', err);
+    return res.status(500).send('Admin key dashboard error.');
+  }
+});
+
+// Delete semua key untuk 1 IP
+app.post('/admin/keys/delete-ip', requireAdmin, async (req, res) => {
+  try {
+    const ip = (req.body.ip || '').trim();
+    const back = '/admin/keys';
+
+    if (!ip) {
+      return res.redirect(back);
+    }
+
+    let webKeys = await loadWebKeys();
+    const before = webKeys.length;
+
+    webKeys = webKeys.filter((k) => k && k.ip !== ip);
+
+    if (webKeys.length !== before) {
+      await saveWebKeys(webKeys);
+    }
+
+    return res.redirect(back);
+  } catch (err) {
+    console.error('Failed to delete keys by IP:', err);
+    return res.redirect('/admin/keys');
+  }
+});
+
+// Delete 1 key (per token)
+app.post('/admin/keys/delete-key', requireAdmin, async (req, res) => {
+  try {
+    const token = (req.body.token || '').trim();
+    const ip = (req.body.ip || '').trim();
+    const back = ip
+      ? `/admin/keys?ip=${encodeURIComponent(ip)}`
+      : '/admin/keys';
+
+    if (!token) {
+      return res.redirect(back);
+    }
+
+    let webKeys = await loadWebKeys();
+    const before = webKeys.length;
+
+    webKeys = webKeys.filter(
+      (k) => !k || String(k.token) !== String(token)
+    );
+
+    if (webKeys.length !== before) {
+      await saveWebKeys(webKeys);
+    }
+
+    return res.redirect(back);
+  } catch (err) {
+    console.error('Failed to delete key:', err);
+    return res.redirect('/admin/keys');
+  }
+});
+
+// Update createdAt & expiresAt untuk 1 token
+app.post('/admin/keys/update-key', requireAdmin, async (req, res) => {
+  try {
+    const token = (req.body.token || '').trim();
+    const ip = (req.body.ip || '').trim();
+    const newCreatedAt = (req.body.createdAt || '').trim();
+    const newExpiresAt = (req.body.expiresAt || '').trim();
+
+    const backBase = ip
+      ? `/admin/keys?ip=${encodeURIComponent(ip)}`
+      : '/admin/keys';
+    const back =
+      token && ip
+        ? backBase + `#token-${encodeURIComponent(token)}`
+        : backBase;
+
+    if (!token) {
+      return res.redirect(backBase);
+    }
+
+    let webKeys = await loadWebKeys();
+    let changed = false;
+
+    webKeys = webKeys.map((k) => {
+      if (!k || String(k.token) !== String(token)) return k;
+      const updated = { ...k };
+      // Bisa diisi bebas: ISO string, timestamp, atau dikosongkan
+      updated.createdAt = newCreatedAt;
+      updated.expiresAt = newExpiresAt;
+      changed = true;
+      return updated;
+    });
+
+    if (changed) {
+      await saveWebKeys(webKeys);
+    }
+
+    return res.redirect(back);
+  } catch (err) {
+    console.error('Failed to update key timestamps:', err);
+    return res.redirect('/admin/keys');
+  }
+});
 
 // ===================================================================
 // Admin API untuk melihat data exec-users
