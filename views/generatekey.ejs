@@ -45,6 +45,25 @@
           const stepsDone = _headerState === 'done' ? totalSteps : 0;
           const pctRaw = (stepsDone / totalSteps) * 100;
           const pct = Math.max(0, Math.min(100, Math.round(pctRaw)));
+
+          // ================= START URL LOGIC =================
+          // Server bisa kirim:
+          //  - adsUrl = full Linkvertise URL (lama)
+          //  - adsUrl = /generatekey/start?... (baru)
+          // Di sisi view, kita pastikan:
+          //  - kalau adsUrl sudah internal (/generatekey/...), pakai apa adanya
+          //  - kalau masih Linkvertise, override jadi /generatekey/start (+ userId)
+          const _adsUrl    = (typeof adsUrl !== 'undefined' && adsUrl) ? String(adsUrl) : '';
+          const _currUid   = (typeof currentUserId !== 'undefined' && currentUserId)
+            ? String(currentUserId).trim()
+            : '';
+          const _uidQuery  = _currUid ? ('?userId=' + encodeURIComponent(_currUid)) : '';
+          let   startUrl   = _adsUrl;
+
+          if (!_adsUrl || _adsUrl.indexOf('/generatekey/') === -1) {
+            // adsUrl kosong atau masih URL eksternal → pakai route internal start
+            startUrl = '/generatekey/start' + _uidQuery;
+          }
         %>
 
         <div class="key-header-progress">
@@ -59,20 +78,30 @@
         <div class="key-header-actions">
           <% if (_headerState === 'timer' && _timerLabel) { %>
             <!-- Mode timer (opsional) -->
-            <button type="button" class="key-btn key-btn-outline" disabled aria-disabled="true">
+            <button
+              type="button"
+              class="key-btn key-btn-outline"
+              disabled
+              aria-disabled="true"
+            >
               <span class="key-btn-icon">⏳</span>
               <span><%= _timerLabel %></span>
             </button>
           <% } else if (_headerState === 'done') { %>
             <!-- Mode DONE: iklan / checkpoint sudah selesai -->
-            <button type="button" class="key-btn key-btn-outline" disabled aria-disabled="true">
+            <button
+              type="button"
+              class="key-btn key-btn-outline"
+              disabled
+              aria-disabled="true"
+            >
               <span class="key-btn-icon">✔</span>
               <span>Done</span>
             </button>
           <% } else { %>
-            <!-- Default: tombol Start → Linkvertise / ads (TAB YANG SAMA) -->
+            <!-- Default: tombol Start → route internal /generatekey/start (TAB YANG SAMA) -->
             <a
-              href="<%= adsUrl %>"
+              href="<%= startUrl %>"
               class="key-btn key-btn-primary"
               rel="noopener noreferrer"
             >
@@ -232,7 +261,7 @@
               type="submit"
               class="key-btn key-btn-ghost"
               style="min-width: 220px; justify-content: center;"
-              <%= canGenerate ? '' : 'disabled aria-disabled="true"' %>
+              <%= canGenerate ? '' : 'disabled="disabled" aria-disabled="true"' %>
             >
               <span class="key-btn-icon">＋</span>
               <span>Get A New Key</span>
