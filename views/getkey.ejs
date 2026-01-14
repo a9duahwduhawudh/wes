@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title><%= title || 'ExHub Key' %></title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg-main: #050814;
+      --bg-card: #0b1020;
+      --bg-card-soft: #0f1529;
+      --accent: #34d399;
+      --accent-soft: rgba(52, 211, 153, 0.12);
+      --danger: #f97373;
+      --text-main: #f9fafb;
+      --text-muted: #9ca3c7;
+      --border-subtle: rgba(255, 255, 255, 0.06);
+      --radius-lg: 18px;
+      --radius-md: 12px;
+      --radius-pill: 999px;
+      --shadow-soft: 0 24px 60px rgba(0, 0, 0, 0.7);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+      color: var(--text-main);
+      background: radial-gradient(circle at top, #1f2937 0, #020617 55%);
+      display: flex;
+      justify-content: center;
+      padding: 32px 16px;
+    }
+
+    .key-page {
+      width: 100%;
+      max-width: 1120px;
+    }
+
+    .hero-card {
+      background: linear-gradient(135deg, #0f172a, #020617);
+      border-radius: 28px;
+      padding: 24px 24px 20px;
+      box-shadow: var(--shadow-soft);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+    }
+
+    .hero-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .hero-title {
+      font-size: 20px;
+      font-weight: 600;
+    }
+
+    .hero-progress-label {
+      font-size: 14px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .hero-progress-bar {
+      height: 6px;
+      width: 100%;
+      border-radius: 999px;
+      background: #020617;
+      overflow: hidden;
+      border: 1px solid rgba(148, 163, 184, 0.35);
+    }
+
+    .hero-progress-fill {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #22c55e, #4ade80);
+      box-shadow: 0 0 16px rgba(34, 197, 94, 0.7);
+    }
+
+    .hero-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+    }
+
+    .btn {
+      border-radius: var(--radius-pill);
+      padding: 10px 22px;
+      font-size: 14px;
+      font-weight: 600;
+      border: 1px solid transparent;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.18s ease-out;
+      white-space: nowrap;
+    }
+
+    .btn-start {
+      background: #22c55e;
+      border-color: #4ade80;
+      color: #022c22;
+      box-shadow: 0 0 20px rgba(34, 197, 94, 0.65);
+    }
+
+    .btn-start:hover {
+      transform: translateY(-1px) scale(1.02);
+      box-shadow: 0 0 26px rgba(34, 197, 94, 0.9);
+    }
+
+    .btn-outline {
+      background: transparent;
+      border-color: rgba(148, 163, 184, 0.5);
+      color: var(--text-main);
+    }
+
+    .btn-outline:hover {
+      background: rgba(15, 23, 42, 0.9);
+      border-color: rgba(148, 163, 184, 0.9);
+    }
+
+    .keys-card {
+      margin-top: 24px;
+      background: var(--bg-card);
+      border-radius: 24px;
+      padding: 20px 20px 18px;
+      border: 1px solid var(--border-subtle);
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.65);
+    }
+
+    .keys-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+    }
+
+    .keys-header-title {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .keys-header-right {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .keys-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 6px;
+      font-size: 13px;
+    }
+
+    .keys-table th,
+    .keys-table td {
+      padding: 8px 6px;
+      text-align: left;
+      border-bottom: 1px solid rgba(15, 23, 42, 0.9);
+    }
+
+    .keys-table th {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    .token-text {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      color: #e5e7eb;
+    }
+
+    .time-left {
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .status-active {
+      background: rgba(34, 197, 94, 0.12);
+      color: #4ade80;
+      border: 1px solid rgba(34, 197, 94, 0.55);
+    }
+
+    .status-expired {
+      background: rgba(148, 163, 184, 0.08);
+      color: #9ca3c7;
+      border: 1px solid rgba(148, 163, 184, 0.4);
+    }
+
+    .status-deleted {
+      background: rgba(248, 113, 113, 0.12);
+      color: #f97373;
+      border: 1px solid rgba(248, 113, 113, 0.5);
+    }
+
+    .keys-empty {
+      text-align: center;
+      padding: 18px 10px 12px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .get-key-footer {
+      margin-top: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .get-key-footer strong {
+      color: #e5e7eb;
+    }
+
+    .error-banner {
+      margin-top: 14px;
+      padding: 10px 12px;
+      border-radius: var(--radius-md);
+      background: rgba(248, 113, 113, 0.08);
+      border: 1px solid rgba(248, 113, 113, 0.45);
+      font-size: 13px;
+      color: #fecaca;
+    }
+
+    @media (max-width: 720px) {
+      .hero-card {
+        padding: 18px 16px 16px;
+      }
+      .hero-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .keys-card {
+        padding: 16px 14px 14px;
+      }
+      .keys-table th:nth-child(3),
+      .keys-table td:nth-child(3) {
+        display: none; /* hide STATUS column label, still show pill in action col if mau */
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="key-page">
+    <!-- HERO / PROGRESS -->
+    <section class="hero-card">
+      <div class="hero-header">
+        <div class="hero-title">Op!Um Key</div>
+        <div class="hero-progress-label">Progress: 0/1</div>
+      </div>
+
+      <div class="hero-progress-bar">
+        <div class="hero-progress-fill"></div>
+      </div>
+
+      <div class="hero-actions">
+        <a
+          href="<%= adsUrl %>"
+          target="_blank"
+          rel="noopener"
+          class="btn btn-start"
+        >
+          START
+        </a>
+      </div>
+    </section>
+
+    <!-- KEY LIST -->
+    <section class="keys-card">
+      <div class="keys-header">
+        <div class="keys-header-title">
+          YOUR KEYS (<%= (keys && keys.length) || 0 %>/<%= maxKeys %>)
+        </div>
+        <div class="keys-header-right">
+          <span>TIME LEFT</span>
+          <span>STATUS</span>
+          <form method="POST" action="/getkey/new">
+            <!-- opsional: userId kalau mau diisi manual -->
+            <!-- <input type="text" name="userId" placeholder="Roblox UserId (opsional)" /> -->
+            <button type="submit" class="btn btn-outline">
+              + GET A NEW KEY
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <% if (keys && keys.length > 0) { %>
+      <table class="keys-table">
+        <thead>
+          <tr>
+            <th>KEY</th>
+            <th>TIME LEFT</th>
+            <th>STATUS</th>
+            <th>ACTIONS</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% keys.forEach(function(key) { %>
+            <tr>
+              <td class="token-text">
+                <%= key.token %>
+              </td>
+              <td class="time-left">
+                <%= key.timeLeftLabel %>
+              </td>
+              <td>
+                <% if (key.deleted) { %>
+                  <span class="status-pill status-deleted">DELETED</span>
+                <% } else if (key.status === 'Expired') { %>
+                  <span class="status-pill status-expired">EXPIRED</span>
+                <% } else { %>
+                  <span class="status-pill status-active">ACTIVE</span>
+                <% } %>
+              </td>
+              <td>
+                <button
+                  type="button"
+                  class="btn btn-outline"
+                  onclick="navigator.clipboard && navigator.clipboard.writeText('<%= key.token %>');"
+                >
+                  COPY
+                </button>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+      <% } else { %>
+        <div class="keys-empty">
+          Belum ada key untuk IP ini. Selesaikan iklan kemudian klik
+          <strong>Get A New Key</strong>.
+        </div>
+      <% } %>
+
+      <div class="get-key-footer">
+        <% if (errorMessage) { %>
+          <div class="error-banner"><%= errorMessage %></div>
+        <% } %>
+        <div>
+          <strong>Langkah:</strong> klik <strong>START</strong> (selesaikan iklan)
+          lalu kembali ke halaman ini dan tekan
+          <strong>GET A NEW KEY</strong>.
+        </div>
+        <div>
+          Setiap IP maksimal memiliki <strong><%= maxKeys %> key aktif</strong>.
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>
