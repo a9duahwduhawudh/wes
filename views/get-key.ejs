@@ -19,8 +19,8 @@
     </a>
     <nav class="nav-links">
       <a href="/">Home</a>
-      <a href="/scripts" class="nav-active">Scripts</a>
-      <a href="/get-key">Get Key Work.Ink</a>
+      <a href="/scripts">Scripts</a>
+      <a href="/get-key" class="nav-active">Get Key Work.Ink</a>
       <a href="/generatekey">Get Key Linkvertise</a>
       <a href="https://discord.gg/exhubeta" target="_blank">Discord</a>
       <a href="/admin/login" class="nav-pill">Login</a>
@@ -35,7 +35,7 @@
       Gunakan Work.ink untuk mendapatkan free key, atau beli lifetime key untuk akses yang lebih nyaman.
     </p>
 
-    <!-- GRID: Work.ink Free Key + Custom Key -->
+    <!-- GRID: Work.ink Free Key + Linkvertise + Custom Key -->
     <div class="getkey-grid">
       <!-- Work.ink free key -->
       <article class="getkey-card">
@@ -46,7 +46,7 @@
           agar mempermudah memperoleh key.
         </p>
         <ul style="margin: 10px 0 14px; padding-left: 18px; font-size: 13px; color: var(--text-muted);">
-          <li>100% otomatis via Work.ink</li>
+          <li>Free Key selama 5 jam via Work.ink</li>
           <li>Key dapat dicek statusnya di halaman ini</li>
           <li>Tidak perlu login / data pribadi</li>
         </ul>
@@ -57,6 +57,29 @@
           class="btn-primary full"
         >
           Open Work.ink
+        </a>
+      </article>
+
+      <!-- Linkvertise free key -->
+      <article class="getkey-card">
+        <span class="badge badge-free big">Free Key</span>
+        <h3>Linkvertise ExHub Key</h3>
+        <p>
+          Dapatkan free key melalui Linkvertise. Wajib disarankan menggunakan browser Chrome
+          agar mempermudah memperoleh key.
+        </p>
+        <ul style="margin: 10px 0 14px; padding-left: 18px; font-size: 13px; color: var(--text-muted);">
+          <li>Free Key selama 2 jam via Linkvertise</li>
+          <li>Key dapat dicek statusnya di halaman ini</li>
+          <li>Tidak perlu login / data pribadi</li>
+        </ul>
+        <a
+          href="https://exc-webs.vercel.app/generatekey"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="btn-primary full"
+        >
+          Open Linkvertise
         </a>
       </article>
 
@@ -84,11 +107,11 @@
       </article>
     </div>
 
-    <!-- CHECK KEY BOX (pakai Work.ink API) -->
+    <!-- CHECK KEY BOX (Work.ink + Linkvertise) -->
     <section class="redeem-box" style="margin-top: 32px;">
-      <h3 style="margin-top:0; margin-bottom:6px;">Check Work.ink Key</h3>
+      <h3 style="margin-top:0; margin-bottom:6px;">Check Work.ink / Linkvertise Key</h3>
       <p style="margin:0; color:var(--text-muted); font-size:13px;">
-        Paste Key Work.ink yang kamu dapat (bukan URL). Contoh:
+        Paste Key Work.ink atau Linkvertise yang kamu dapat (bukan URL). Contoh:
         <code style="font-size:12px;">7c67xx-xxx-xxxx-xxxxx-xxxxx</code>
       </p>
 
@@ -97,7 +120,7 @@
           id="check-key-input"
           type="text"
           name="token"
-          placeholder="Masukkan Key Work.ink di sini"
+          placeholder="Masukkan Key Work.ink / Linkvertise di sini"
           autocomplete="off"
         />
         <button type="submit" class="btn-primary">Check Key</button>
@@ -174,6 +197,54 @@
       }
     }
 
+    // --- Helper: cek ke Work.ink ---
+    async function checkWorkInk(token) {
+      const url = 'https://work.ink/_api/v2/token/isValid/' + encodeURIComponent(token);
+      const res = await fetch(url, { method: 'GET' });
+
+      if (!res.ok) {
+        throw new Error('Gagal HTTP Work.ink: ' + res.status);
+      }
+
+      const data = await res.json();
+
+      if (!data || typeof data.valid === 'undefined') {
+        throw new Error('Response Work.ink tidak dikenali.');
+      }
+
+      const info = data.info || {};
+      return {
+        provider: 'workink',
+        valid: !!data.valid,
+        createdAt: info.createdAt,
+        expiresAfter: info.expiresAfter
+      };
+    }
+
+    // --- Helper: cek ke Linkvertise API milikmu ---
+    async function checkLinkvertise(token) {
+      const url = 'https://exc-webs.vercel.app/api/isValidate/' + encodeURIComponent(token);
+      const res = await fetch(url, { method: 'GET' });
+
+      if (!res.ok) {
+        throw new Error('Gagal HTTP Linkvertise API: ' + res.status);
+      }
+
+      const data = await res.json();
+
+      if (!data || typeof data.valid === 'undefined') {
+        throw new Error('Response Linkvertise API tidak dikenali.');
+      }
+
+      const info = data.info || {};
+      return {
+        provider: 'linkvertise',
+        valid: !!data.valid,
+        createdAt: info.createdAt,
+        expiresAfter: info.expiresAfter
+      };
+    }
+
     if (form) {
       form.addEventListener('submit', async function (e) {
         e.preventDefault();
@@ -184,40 +255,54 @@
           return;
         }
 
-        setState('Checking key di Work.ink…', 'info');
+        setState('Checking key di Work.ink dan Linkvertise…', 'info');
         metaEl.textContent = '';
 
         try {
-          const url =
-            'https://work.ink/_api/v2/token/isValid/' +
-            encodeURIComponent(token);
+          let workResult = null;
+          let linkResult = null;
 
-          const res = await fetch(url, { method: 'GET' });
+          // Langkah 1: Coba cek di Work.ink
+          try {
+            workResult = await checkWorkInk(token);
+          } catch (errWork) {
+            console.warn('Work.ink check failed:', errWork);
+          }
 
-          if (!res.ok) {
-            setState('Gagal menghubungi Work.ink (' + res.status + ').', 'error');
+          if (workResult && workResult.valid) {
+            const created = formatTs(workResult.createdAt);
+            const expires = formatTs(workResult.expiresAfter);
+            setState('Token VALID dan bisa digunakan (Work.ink).', 'ok');
+            metaEl.textContent =
+              'Provider: Work.ink  |  Created at: ' + created + '  |  Expired at: ' + expires;
             return;
           }
 
-          const data = await res.json();
+          // Langkah 2: Jika tidak valid di Work.ink, coba Linkvertise
+          try {
+            linkResult = await checkLinkvertise(token);
+          } catch (errLv) {
+            console.warn('Linkvertise check failed:', errLv);
+          }
 
-          if (!data || typeof data.valid === 'undefined') {
-            setState('Response Work.ink tidak dikenali.', 'error');
+          if (linkResult && linkResult.valid) {
+            const created = formatTs(linkResult.createdAt);
+            const expires = formatTs(linkResult.expiresAfter);
+            setState('Token VALID dan bisa digunakan (Linkvertise).', 'ok');
+            metaEl.textContent =
+              'Provider: Linkvertise  |  Created at: ' + created + '  |  Expired at: ' + expires;
             return;
           }
 
-          if (data.valid) {
-            setState('Token VALID dan bisa digunakan.', 'ok');
-          } else {
+          // Jika sampai di sini berarti:
+          // - Work.ink invalid / gagal, dan
+          // - Linkvertise invalid / gagal
+          if ((workResult && workResult.valid === false) ||
+              (linkResult && linkResult.valid === false)) {
             setState('Token TIDAK valid atau sudah kadaluarsa.', 'error');
+          } else {
+            setState('Token tidak dapat diverifikasi di Work.ink maupun Linkvertise.', 'error');
           }
-
-          const info = data.info || {};
-          const created = formatTs(info.createdAt);
-          const expires = formatTs(info.expiresAfter);
-
-          metaEl.textContent =
-            'Created at: ' + created + '  |  Expired at: ' + expires;
         } catch (err) {
           console.error(err);
           setState('Terjadi error saat cek key.', 'error');
