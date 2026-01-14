@@ -699,16 +699,17 @@ body.page-dark {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: radial-gradient(
-        circle at top,
-        rgba(123, 255, 58, 0.12),
-        transparent 55%
-      ),
+  background:
     radial-gradient(
-        circle at bottom,
-        rgba(60, 255, 208, 0.12),
-        transparent 55%
-      ),
+      circle at top,
+      rgba(123, 255, 58, 0.12),
+      transparent 55%
+    ),
+    radial-gradient(
+      circle at bottom,
+      rgba(60, 255, 208, 0.12),
+      transparent 55%
+    ),
     var(--bg-main, #05080f);
 }
 
@@ -1489,6 +1490,7 @@ body.page-dark {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  padding: 32px 0 40px;
 }
 
 /* override untuk admin-dashboard, agar admin-section tidak center penuh layar */
@@ -1925,5 +1927,406 @@ body.page-dark {
   }
   .hero-title {
     font-size: 32px;
+  }
+}
+
+/* =========================================================
+   GLOBAL SCROLLBAR (supaya table & blok JSON lebih rapi)
+   ========================================================= */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.9);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.6);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(248, 250, 252, 0.8);
+}
+
+/* Tambahan sedikit efek glow untuk blok JSON key */
+
+.key-json-wrapper {
+  position: relative;
+}
+
+.key-json-wrapper::before {
+  content: "";
+  position: absolute;
+  inset: -40%;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(123, 255, 58, 0.2), transparent 55%),
+    radial-gradient(circle at 100% 100%, rgba(59, 130, 246, 0.15), transparent 55%);
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* =========================================================
+   ADMIN DASHBOARD – BADGE TUNING (hanya di area admin)
+   ========================================================= */
+
+.admin-dashboard .badge-success {
+  border: 1px solid rgba(34, 197, 94, 0.9);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35);
+}
+
+.admin-dashboard .badge-danger {
+  border: 1px solid rgba(248, 113, 113, 0.9);
+  box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.35);
+}
+
+.admin-dashboard .badge-muted {
+  border: 1px solid rgba(148, 163, 184, 0.5);
+}
+
+/* =========================================================
+   ADMIN DASHBOARD KEY (admin-dashboardkey.ejs)
+   Layout khusus + status pill + table activity
+   ========================================================= */
+
+/* container utama halaman key admin – gunakan salah satu class ini di root */
+.key-admin-page,
+.admin-dashboard-key,
+.admin-key-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* shell utama kartu besar key dashboard */
+.key-admin-shell,
+.admin-key-shell {
+  border-radius: 22px;
+  padding: 18px 18px 16px;
+  background: radial-gradient(circle at top left, #101827, #020617);
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  box-shadow:
+    0 26px 60px rgba(0, 0, 0, 0.9),
+    0 0 0 1px rgba(15, 23, 42, 0.9);
+}
+
+/* header di atas tabel key */
+
+.key-admin-header,
+.admin-key-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 10px;
+}
+
+.key-admin-header-main,
+.admin-key-header-main {
+  min-width: 0;
+}
+
+.key-admin-title,
+.admin-key-title {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.key-admin-subtitle,
+.admin-key-subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.key-admin-header-actions,
+.admin-key-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* pill kecil di bawah title, misal: "Live Key Activity" / "JSON Body Template" */
+
+.key-admin-pill-row {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.key-admin-pill {
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.6);
+  background: rgba(15, 23, 42, 0.85);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.key-admin-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.8);
+}
+
+/* grid metric ringkas: total key, active, expired, banned, dsb */
+
+.key-admin-metrics,
+.admin-key-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.key-admin-metric-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 14px;
+  padding: 10px 10px 9px;
+  background: radial-gradient(
+      circle at 0 0,
+      rgba(123, 255, 58, 0.12),
+      rgba(15, 23, 42, 0.96)
+    );
+  border: 1px solid rgba(148, 163, 184, 0.45);
+}
+
+.key-admin-metric-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    circle at 120% 0,
+    rgba(59, 130, 246, 0.2),
+    transparent 55%
+  );
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.key-admin-metric-label {
+  position: relative;
+  z-index: 1;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.9);
+}
+
+.key-admin-metric-value {
+  position: relative;
+  z-index: 1;
+  margin-top: 3px;
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.key-admin-metric-sub {
+  position: relative;
+  z-index: 1;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* status pill untuk kolom Status key */
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  background: rgba(15, 23, 42, 0.9);
+  color: var(--text-muted);
+}
+
+.status-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.9);
+}
+
+/* variasi warna status */
+
+.status-pill--active {
+  background: radial-gradient(
+      circle at 0 0,
+      rgba(34, 197, 94, 0.35),
+      rgba(15, 23, 42, 0.9)
+    );
+  border-color: rgba(34, 197, 94, 0.85);
+  color: #bbf7d0;
+}
+
+.status-pill--active .status-pill-dot {
+  background: #22c55e;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.9);
+}
+
+.status-pill--expired {
+  background: radial-gradient(
+      circle at 0 0,
+      rgba(248, 113, 113, 0.3),
+      rgba(15, 23, 42, 0.95)
+    );
+  border-color: rgba(248, 113, 113, 0.9);
+  color: #fecaca;
+}
+
+.status-pill--expired .status-pill-dot {
+  background: #f97373;
+  box-shadow: 0 0 8px rgba(248, 113, 113, 0.85);
+}
+
+.status-pill--pending {
+  background: radial-gradient(
+      circle at 0 0,
+      rgba(250, 204, 21, 0.28),
+      rgba(15, 23, 42, 0.95)
+    );
+  border-color: rgba(250, 204, 21, 0.9);
+  color: #fef9c3;
+}
+
+.status-pill--pending .status-pill-dot {
+  background: #facc15;
+  box-shadow: 0 0 8px rgba(250, 204, 21, 0.85);
+}
+
+/* wrapper tabel khusus key admin:
+   <div class="table-wrapper key-admin-table-wrapper"> ... */
+
+.key-admin-table-wrapper {
+  margin-top: 8px;
+  border-radius: 16px;
+  border: 1px solid rgba(15, 23, 42, 1);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.9);
+  overflow: hidden;
+}
+
+/* table activity – tambahkan class ini ke <table> selain .table-compact / .key-table */
+
+.key-table-activity tbody tr {
+  transition:
+    background-color 0.15s ease,
+    transform 0.06s ease,
+    box-shadow 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.key-table-activity tbody tr:hover td {
+  background: radial-gradient(
+      circle at 0 0,
+      rgba(56, 189, 248, 0.22),
+      rgba(15, 23, 42, 0.95)
+    );
+  box-shadow:
+    0 0 0 1px rgba(56, 189, 248, 0.7),
+    0 16px 38px rgba(15, 23, 42, 0.95);
+}
+
+.key-table-activity .key-token {
+  cursor: pointer;
+}
+
+/* row yang baru saja di-copy / di-highlight dari JS bisa dikasih class .key-row-highlight */
+
+.key-row-highlight td {
+  background: radial-gradient(
+      circle at 0 0,
+      rgba(123, 255, 58, 0.22),
+      rgba(15, 23, 42, 0.96)
+    ) !important;
+  box-shadow:
+    0 0 0 1px rgba(123, 255, 58, 0.8),
+    0 18px 42px rgba(22, 163, 74, 0.55);
+}
+
+/* area filter / search di atas tabel key admin */
+
+.key-admin-filters {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.key-admin-filters-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  background: rgba(15, 23, 42, 0.9);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.key-admin-filters-group input,
+.key-admin-filters-group select {
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-main);
+  font-size: 12px;
+}
+
+/* mini badge status di tabel, misal kolom "Type" / "Source" */
+
+.key-badge-type {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid rgba(148, 163, 184, 0.6);
+  background: rgba(15, 23, 42, 0.9);
+  color: var(--text-muted);
+}
+
+/* responsif khusus halaman key admin */
+
+@media (max-width: 880px) {
+  .key-admin-header,
+  .admin-key-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .key-admin-header-actions,
+  .admin-key-header-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .key-admin-shell,
+  .admin-key-shell {
+    border-radius: 18px;
+    padding: 16px 14px 14px;
+  }
+
+  .key-admin-metrics,
+  .admin-key-metrics {
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   }
 }
