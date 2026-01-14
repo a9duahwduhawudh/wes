@@ -179,7 +179,7 @@
                       <td class="table-main-text"><%= row.totalKeys || 0 %></td>
                       <td class="table-main-text"><%= row.activeKeys || 0 %></td>
 
-                      <!-- LAST CREATED: WITA / WIB -->
+                      <!-- LAST CREATED -->
                       <td class="table-main-text">
                         <% if (row.lastCreatedAtWITA || row.lastCreatedAtWIB) { %>
                           <div><%= row.lastCreatedAtWITA || '-' %></div>
@@ -189,7 +189,7 @@
                         <% } %>
                       </td>
 
-                      <!-- LAST EXPIRES: WITA / WIB -->
+                      <!-- LAST EXPIRES -->
                       <td class="table-main-text">
                         <% if (row.lastExpiresAtWITA || row.lastExpiresAtWIB) { %>
                           <div><%= row.lastExpiresAtWITA || '-' %></div>
@@ -334,15 +334,17 @@
                             </div>
                           </div>
 
-                          <!-- EXPIRES TTL (RELATIVE) -->
+                          <!-- EXPIRES TTL (RELATIVE, HH:MM:SS) -->
                           <div class="admin-key-field" style="margin-top:8px;">
-                            <div class="table-sub-text">time left (HH:MM:SS)</div>
+                            <div class="table-sub-text">
+                              time left (HH:MM:SS)
+                            </div>
                             <input
                               type="text"
-                              name="expiresTtl"
-                              class="key-input"
-                              value="<%= k.ttlInput || '' %>"
-                              placeholder="HH:MM:SS (kosongkan = tidak diubah)"
+                              name="expiresAt"
+                              class="key-input admin-ttl-input"
+                              value="<%= (k.status === 'Active' && k.timeLeftLabel && k.timeLeftLabel !== 'Expired') ? k.timeLeftLabel : '' %>"
+                              placeholder="HH:MM:SS (isi untuk set TTL baru)"
                               autocomplete="off"
                               style="margin-top:4px; max-width:160px;"
                             />
@@ -370,7 +372,7 @@
                         </form>
                       </td>
 
-                      <!-- STATUS -->
+                      <!-- STATUS + LIVE COUNTDOWN -->
                       <td>
                         <%
                           var statusLabel = k.status || 'Active';
@@ -381,12 +383,24 @@
                               ? 'status-pill status-pill--expired'
                               : 'status-pill status-pill--pending';
                         %>
-                        <span class="<%= statusClass %>">
+                        <span
+                          class="<%= statusClass %>"
+                          data-status-pill="1"
+                          data-token="<%= k.token %>"
+                        >
                           <span class="status-pill-dot"></span>
-                          <%= statusLabel %>
+                          <span class="status-pill-text"><%= statusLabel %></span>
                         </span>
-                        <div class="table-sub-text" style="margin-top:4px;">
-                          Time left: <%= k.timeLeftLabel || '-' %>
+                        <div
+                          class="table-sub-text time-left-container"
+                          style="margin-top:4px;"
+                          data-token="<%= k.token %>"
+                          data-expires-ms="<%= k.expiresAtMs || '' %>"
+                        >
+                          Time left:
+                          <span class="time-left-text">
+                            <%= k.timeLeftLabel || '-' %>
+                          </span>
                         </div>
                       </td>
 
@@ -437,5 +451,125 @@
       </main>
     </div>
   </div>
+
+  <!-- ==================== JS: TTL Convert + Live Countdown ==================== -->
+  <script>
+    (function () {
+      // Ubah input HH:MM:SS -> "Xh Ym Zs" sebelum submit,
+      // agar cocok dengan parseRelativeExpiresInput() di server.js
+      function initTtlConversion() {
+        var forms = document.querySelectorAll('form.admin-key-inline-form');
+        if (!forms || !forms.length) return;
+
+        forms.forEach(function (form) {
+          form.addEventListener('submit', function () {
+            var ttlInput = form.querySelector('input[name="expiresAt"]');
+            if (!ttlInput) return;
+
+            var v = (ttlInput.value || '').trim();
+            if (!v) {
+              // Kosong: biarkan apa adanya (server akan treat sesuai logic-nya).
+              return;
+            }
+
+            // Jika format "HH:MM:SS", convert ke "Hh Mm Ss" (relative)
+            if (/^\\d{1,2}:\\d{1,2}:\\d{1,2}$/.test(v)) {
+              var parts = v.split(':').map(function (p) {
+                var n = parseInt(p, 10);
+                return isNaN(n) ? 0 : n;
+              });
+
+              var hh = parts[0] || 0;
+              var mm = parts[1] || 0;
+              var ss = parts[2] || 0;
+
+              if (hh < 0) hh = 0;
+              if (mm < 0) mm = 0;
+              if (ss < 0) ss = 0;
+
+              var out = '';
+              if (hh > 0) out += hh + 'h ';
+              if (mm > 0) out += mm + 'm ';
+              if (ss > 0) out += ss + 's';
+              out = out.trim();
+
+              if (!out) {
+                // Kalau semua 0, secara praktis TTL 0 detik -> treat sebagai 1s kecil
+                out = '0h 0m 1s';
+              }
+
+              ttlInput.value = out;
+            }
+            // Jika user sudah isi "1h 10m 20s", tidak diubah
+          });
+        });
+      }
+
+      // Realtime countdown "Time left" menggunakan expiresAtMs dari server
+      function initCountdown() {
+        var containers = document.querySelectorAll('.time-left-container[data-expires-ms]');
+        if (!containers || !containers.length) return;
+
+        function formatHHMMSS(totalSeconds) {
+          if (totalSeconds < 0) totalSeconds = 0;
+          var h = Math.floor(totalSeconds / 3600);
+          var m = Math.floor((totalSeconds % 3600) / 60);
+          var s = totalSeconds % 60;
+          var pad = function (n) {
+            return n < 10 ? '0' + n : String(n);
+          };
+          return pad(h) + ':' + pad(m) + ':' + pad(s);
+        }
+
+        function tick() {
+          var now = Date.now();
+
+          containers.forEach(function (container) {
+            var expiresStr = container.getAttribute('data-expires-ms');
+            if (!expiresStr) return;
+
+            var expiresMs = parseInt(expiresStr, 10);
+            if (!expiresMs || isNaN(expiresMs)) return;
+
+            var diffMs = expiresMs - now;
+            var textEl = container.querySelector('.time-left-text');
+            if (!textEl) return;
+
+            var token = container.getAttribute('data-token') || null;
+
+            if (diffMs <= 0) {
+              textEl.textContent = 'Expired';
+              container.setAttribute('data-expires-ms', '');
+
+              if (token) {
+                var pill = document.querySelector('.status-pill[data-token="' + token + '"]');
+                if (pill) {
+                  pill.classList.remove('status-pill--active');
+                  pill.classList.remove('status-pill--pending');
+                  pill.classList.add('status-pill--expired');
+
+                  var pillText = pill.querySelector('.status-pill-text');
+                  if (pillText) {
+                    pillText.textContent = 'Expired';
+                  }
+                }
+              }
+            } else {
+              var totalSeconds = Math.floor(diffMs / 1000);
+              textEl.textContent = formatHHMMSS(totalSeconds);
+            }
+          });
+        }
+
+        tick();
+        setInterval(tick, 1000);
+      }
+
+      document.addEventListener('DOMContentLoaded', function () {
+        initTtlConversion();
+        initCountdown();
+      });
+    })();
+  </script>
 </body>
 </html>
