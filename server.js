@@ -147,11 +147,16 @@ const KV_WEB_KEYS_KEY = 'exhub:web-keys';
 // Konfigurasi halaman generatekey (Luarmor-style)
 const MAX_KEYS_PER_IP = parseInt(process.env.MAX_KEYS_PER_IP || '10', 10);
 const DEFAULT_KEY_HOURS = parseInt(process.env.DEFAULT_KEY_HOURS || '24', 10);
-// Set REQUIRE_ADS_CHECKPOINT=1 kalau ingin tombol "Get A New Key" hanya aktif
-// setelah user kembali dari Linkvertise (mis. redirect ke /generatekey?done=1).
+
+// Wajibkan “selesai iklan” sebelum bisa ambil key (per 1 key).
+// Set di env: REQUIRE_ADS_CHECKPOINT=1
 const REQUIRE_ADS_CHECKPOINT = process.env.REQUIRE_ADS_CHECKPOINT === '1';
 
-const GENERATEKEY_ADS_URL = process.env.GENERATEKEY_ADS_URL || '#';
+// Linkvertise utama untuk tombol Start.
+// Bisa dioverride via ENV: GENERATEKEY_ADS_URL
+const GENERATEKEY_ADS_URL =
+  process.env.GENERATEKEY_ADS_URL ||
+  'https://linkvertise.com/2995260/0xLAgWUZzCns?o=sharing';
 
 // ---- helper file lokal (fallback) ---------------------------------
 
@@ -1146,7 +1151,7 @@ app.get('/scripts', async (req, res) => {
 });
 
 // ===================================================================
-// Generate Key PAGE (Luarmor-style, simple checkpoint)
+// Generate Key PAGE (Luarmor-style, strict checkpoint per 1 key)
 // ===================================================================
 
 app.get('/generatekey', async (req, res) => {
@@ -1196,8 +1201,8 @@ app.get('/generatekey', async (req, res) => {
 
       if (!createdMs && !expiresMs) continue;
 
+      // GC expired
       if (expiresMs && expiresMs <= nowMs) {
-        // expired → GC
         continue;
       }
 
@@ -1221,8 +1226,12 @@ app.get('/generatekey', async (req, res) => {
       }
     }
 
-    // Optional gating: jika REQUIRE_ADS_CHECKPOINT=1, butuh ?done=1 / ?ok=1 sekali
+    // ================== CHECKPOINT IKLAN ==================
+    // REQUIRE_ADS_CHECKPOINT=1 → wajib ada tanda “done/ok/ads/checkpoint”
+    // dari Linkvertise (redirect ke /generatekey?done=1).
+    let sessionOk = false;
     let allowGenerate = true;
+
     if (REQUIRE_ADS_CHECKPOINT) {
       const fromAds =
         req.query.done === '1' ||
@@ -1231,14 +1240,26 @@ app.get('/generatekey', async (req, res) => {
         req.query.ads === '1';
 
       if (fromAds) {
+        // tandai di session bahwa user BARU SAJA selesai iklan
         req.session.generateKeyAdsOk = true;
       }
 
-      const sessionOk = !!req.session.generateKeyAdsOk;
-      allowGenerate = sessionOk || myKeys.length > 0;
+      sessionOk = !!req.session.generateKeyAdsOk;
+      // HANYA aktif kalau sessionOk = true
+      allowGenerate = sessionOk;
     }
 
-    const headerState = myKeys.length > 0 ? 'done' : 'start';
+    // HEADER STATE:
+    // - Jika checkpoint aktif: 'done' saat sudah balik dari iklan (sebelum ambil key),
+    //   'start' jika belum / sudah dipakai (flag direset setelah ambil key).
+    // - Jika checkpoint nonaktif: 'done' kalau sudah punya key, 'start' kalau belum.
+    const headerState = REQUIRE_ADS_CHECKPOINT
+      ? sessionOk
+        ? 'done'
+        : 'start'
+      : myKeys.length > 0
+      ? 'done'
+      : 'start';
 
     return res.render('generatekey', {
       title: 'ExHub - Generate Key',
@@ -1248,7 +1269,7 @@ app.get('/generatekey', async (req, res) => {
       errorMessage: (req.query.errorMessage || '').trim() || null,
       defaultKeyHours,
       headerState,
-      headerTimerLabel: null,
+      headerTimerLabel: null, // belum pakai mode timer
       allowGenerate,
       keyAction: '/getkey/new',
       currentUserId,
@@ -1257,6 +1278,7 @@ app.get('/generatekey', async (req, res) => {
     });
   } catch (err) {
     console.error('Failed to render /generatekey:', err);
+
     let defaultKeyHours = DEFAULT_KEY_HOURS;
     let maxKeys = MAX_KEYS_PER_IP;
     try {
@@ -1309,12 +1331,12 @@ app.post('/getkey/new', async (req, res) => {
         ? siteConfig.maxKeysPerIp
         : MAX_KEYS_PER_IP;
 
-    // Optional gating: jika REQUIRE_ADS_CHECKPOINT=1 dan belum ada flag di session → tolak
+    // WAJIB: kalau checkpoint diaktifkan, tapi belum ada flag sessionOk → tolak
     if (REQUIRE_ADS_CHECKPOINT && !req.session.generateKeyAdsOk) {
       const parts = [];
       parts.push(
         'errorMessage=' +
-          encodeURIComponent('Complete the ads step (Start) first.')
+          encodeURIComponent('Complete the Start / ads step first.')
       );
       if (currentUserId) {
         parts.push('userId=' + encodeURIComponent(currentUserId));
@@ -1397,6 +1419,12 @@ app.post('/getkey/new', async (req, res) => {
 
     webKeys.push(newEntry);
     await saveWebKeys(webKeys);
+
+    // Setelah BERHASIL ambil 1 key, flag “sudah lewat iklan” direset,
+    // sehingga untuk key ke-2 wajib klik Start & selesaikan iklan lagi.
+    if (REQUIRE_ADS_CHECKPOINT) {
+      req.session.generateKeyAdsOk = false;
+    }
 
     const params = [];
     if (currentUserId) {
@@ -1797,7 +1825,9 @@ app.post('/api/exec', async (req, res) => {
     const createdAtStr =
       createdAt !== undefined && createdAt !== null ? String(createdAt) : null;
     const expiresAtStr =
-      expiresAt !== undefined && expiresAt !== null ? String(expiresAt) : null;
+      expiresAt !== undefined && expiresAt !== null
+        ? String(expiresAt)
+        : null;
 
     const ip =
       (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
