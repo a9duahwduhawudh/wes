@@ -47,7 +47,7 @@
         </div>
       </header>
 
-      <!-- ALERT ERROR -->
+      <!-- ALERT ERROR (opsional) -->
       <% if (errorMessage) { %>
         <div class="key-alert key-alert-error">
           <span><%= errorMessage %></span>
@@ -80,7 +80,7 @@
             </p>
           </div>
 
-          <!-- Optional: form kecil (GET saja, tidak generate apa-apa di backend) -->
+          <!-- Form kecil untuk refresh / filter by userId (opsional) -->
           <form
             action="/generatekey"
             method="GET"
@@ -111,7 +111,7 @@
                 </tr>
               </thead>
               <tbody>
-                <% keys.forEach(function(k, idx) { %>
+                <% keys.forEach(function(k) { %>
                   <tr>
                     <td class="key-cell-token">
                       <code class="key-token"><%= k.token %></code>
@@ -151,40 +151,6 @@
             </p>
           </div>
         <% } %>
-      </section>
-
-      <!-- BODY JSON TEMPLATE -->
-      <section class="key-body key-body-json">
-        <div class="key-body-header">
-          <div>
-            <h2 class="key-section-title">Body JSON Template</h2>
-            <p class="key-body-subtitle">
-              Use this JSON as the body when calling
-              <code>/api/exec</code> from your Roblox loader.
-            </p>
-          </div>
-        </div>
-
-        <div class="key-json-wrapper">
-          <pre class="key-json-block"><code><%- exampleJson %></code></pre>
-        </div>
-      </section>
-
-      <!-- LOADER SCRIPT EXAMPLE -->
-      <section class="key-body key-body-json">
-        <div class="key-body-header">
-          <div>
-            <h2 class="key-section-title">Loader Script Example</h2>
-            <p class="key-body-subtitle">
-              Example Roblox script that sends the JSON above to
-              <code>/api/exec</code> and then executes your ExHub script.
-            </p>
-          </div>
-        </div>
-
-        <div class="key-json-wrapper">
-          <pre class="key-json-block"><code><%- loaderSnippet %></code></pre>
-        </div>
       </section>
     </div>
   </div>
