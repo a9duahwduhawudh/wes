@@ -137,6 +137,10 @@ const RAW_FILES_DIR = path.join(__dirname, 'private-raw');
 const KV_RAW_FILES_META_KEY = 'exhub:raw-files-meta';
 const KV_RAW_BODY_PREFIX = 'exhub:raw-body:';
 
+// Konfigurasi halaman generatekey (Luarmor-style)
+const MAX_KEYS_PER_IP = parseInt(process.env.MAX_KEYS_PER_IP || '1', 10);
+const GENERATEKEY_ADS_URL = process.env.GENERATEKEY_ADS_URL || '#';
+
 // ---- helper file lokal (fallback) ---------------------------------
 
 function loadScriptsFromFile() {
@@ -966,7 +970,7 @@ app.get('/scripts', async (req, res) => {
 });
 
 // ===================================================================
-// Generate Key PAGE (baru) – tidak mengganggu /get-key lama
+// Generate Key PAGE (Luarmor-style) – tidak mengganggu /get-key lama
 // ===================================================================
 
 app.get('/generatekey', async (req, res) => {
@@ -997,6 +1001,44 @@ app.get('/generatekey', async (req, res) => {
         : safeToken
         ? 'success'
         : 'idle');
+
+    // Build keys array untuk tabel + progress
+    const keys = [];
+    if (safeToken) {
+      const now = new Date();
+      let timeLeftLabel = 'N/A';
+      let statusLabel = 'Active';
+
+      if (expiresAt) {
+        const d = new Date(expiresAt);
+        if (!Number.isNaN(d.getTime())) {
+          const diffMs = d - now;
+          if (diffMs <= 0) {
+            statusLabel = 'Expired';
+            timeLeftLabel = 'Expired';
+          } else {
+            const totalMinutes = Math.floor(diffMs / 60000);
+            const hours = Math.floor(totalMinutes / 60);
+            const minutes = totalMinutes % 60;
+            if (hours > 0) {
+              timeLeftLabel = `${hours}h ${minutes}m`;
+            } else {
+              timeLeftLabel = `${minutes}m`;
+            }
+          }
+        }
+      }
+
+      if (effectiveStatus === 'error') {
+        statusLabel = 'Error';
+      }
+
+      keys.push({
+        token: safeToken,
+        timeLeftLabel,
+        status: statusLabel
+      });
+    }
 
     // Contoh BODY JSON untuk /api/exec
     const bodyPreview = {
@@ -1036,7 +1078,7 @@ local body = {
     expiresAt = ${
       bodyPreview.expiresAt ? `"${bodyPreview.expiresAt}"` : "nil"
     },
-    mapName = game.PlaceId,
+    mapName = "Game / Map Name",
     placeId = game.PlaceId,
     serverId = game.JobId,
     gameId = game.GameId
@@ -1063,6 +1105,7 @@ end
 loadstring(game:HttpGet("https://exc-webs.vercel.app/api/script/${bodyPreview.scriptId}", true))()`;
 
     return res.render('generatekey', {
+      title: 'ExHub Key Generator',
       status: effectiveStatus,
       token: safeToken,
       createdAt: createdAt || null,
@@ -1072,7 +1115,10 @@ loadstring(game:HttpGet("https://exc-webs.vercel.app/api/script/${bodyPreview.sc
       scripts,
       defaultScriptId,
       exampleJson,
-      loaderSnippet
+      loaderSnippet,
+      keys,
+      maxKeys: MAX_KEYS_PER_IP,
+      adsUrl: GENERATEKEY_ADS_URL
     });
   } catch (err) {
     console.error('Failed to render /generatekey:', err);
@@ -1618,6 +1664,115 @@ app.get('/api/exec', async (req, res) => {
   } catch (err) {
     console.error('Failed to load exec users (GET /api/exec):', err);
     return res.status(500).json({ error: 'exec_users_error' });
+  }
+});
+
+// ===================================================================
+// API isValidate – cek key + BODY JSON template
+// ===================================================================
+
+app.get('/api/isValidate/:key', async (req, res) => {
+  try {
+    const rawKey = (req.params.key || '').trim();
+    if (!rawKey) {
+      return res.status(400).json({
+        ok: false,
+        error: 'missing_key'
+      });
+    }
+
+    const normKey = rawKey.toUpperCase();
+
+    const execUsers = await loadExecUsers();
+    const redeemedList = await loadRedeemedKeys();
+
+    const matchesExec = execUsers.filter((u) => {
+      if (!u || !u.keyToken) return false;
+      return String(u.keyToken).toUpperCase() === normKey;
+    });
+
+    const redeemed = redeemedList.find((k) => {
+      if (!k || !k.key) return false;
+      return String(k.key).toUpperCase() === normKey;
+    });
+
+    let valid = false;
+    let status = 'UNKNOWN';
+    const boundUsers = [];
+
+    let createdAt = null;
+    let expiresAt = null;
+
+    if (matchesExec.length > 0) {
+      valid = true;
+      status = 'ACTIVE';
+
+      matchesExec.forEach((u) => {
+        boundUsers.push({
+          scriptId: u.scriptId || null,
+          userId: u.userId || null,
+          username: u.username || null,
+          displayName: u.displayName || null,
+          hwid: u.hwid || null,
+          executorUse: u.executorUse || null,
+          lastExecuteAt: u.lastExecuteAt || null,
+          mapName: u.mapName || null,
+          placeId: u.placeId || null,
+          serverId: u.serverId || null,
+          gameId: u.gameId || null
+        });
+
+        if (!createdAt && u.keyCreatedAt) {
+          createdAt = u.keyCreatedAt;
+        }
+        if (!expiresAt && u.keyExpiresAt) {
+          expiresAt = u.keyExpiresAt;
+        }
+      });
+    } else if (redeemed) {
+      valid = true;
+      status = 'REDEEMED';
+      createdAt = redeemed.redeemedAt || null;
+    }
+
+    const nowIso = new Date().toISOString();
+
+    const bodyTemplate = {
+      scriptId:
+        (boundUsers[0] && boundUsers[0].scriptId) ||
+        'your-script-id',
+      userId: 1234567890,
+      username: 'PlayerUsername',
+      displayName: 'PlayerDisplayName',
+      hwid: 'HWID-OR-DEVICE-ID',
+      executorUse: 'ExecutorName',
+      clientExecuteCount: 1,
+      key: normKey,
+      createdAt: createdAt || nowIso,
+      expiresAt: expiresAt,
+      mapName: 'Game / Map Name',
+      placeId: 1234567890,
+      serverId: 'server-job-id',
+      gameId: 1234567890
+    };
+
+    return res.json({
+      ok: true,
+      key: normKey,
+      valid,
+      status,
+      createdAt,
+      expiresAt,
+      boundCount: boundUsers.length,
+      boundUsers,
+      bodyTemplate
+    });
+  } catch (err) {
+    console.error('Failed to handle /api/isValidate:', err);
+    return res.status(500).json({
+      ok: false,
+      error: 'validate_error'
+    });
   }
 });
 
