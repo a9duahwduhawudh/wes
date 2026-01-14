@@ -3,6 +3,7 @@ require('dotenv').config();
 
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const express = require('express');
 const bodyParser = require('body-parser');
 const cookieSession = require('cookie-session');
@@ -42,7 +43,7 @@ async function kvRequest(pathPart) {
       }
     });
 
-      if (!res.ok) {
+    if (!res.ok) {
       const text = await res.text().catch(() => '');
       console.error('KV error', res.status, text);
       return null;
@@ -126,7 +127,7 @@ const KV_REDEEMED_KEY = 'exhub:redeemed-keys';
 // key KV untuk data tracking eksekusi user (format legacy: array besar)
 const KV_EXEC_USERS_KEY = 'exhub:exec-users';
 // format baru: per-entry + index
-const KV_EXEC_ENTRY_PREFIX = 'exhub:exec-user:';    // exhub:exec-user:<entryKey>
+const KV_EXEC_ENTRY_PREFIX = 'exhub:exec-user:'; // exhub:exec-user:<entryKey>
 const KV_EXEC_INDEX_KEY = 'exhub:exec-users:index'; // set berisi entryKey
 // prefix KV untuk body script
 const KV_SCRIPT_BODY_PREFIX = 'exhub:script-body:';
@@ -137,8 +138,19 @@ const RAW_FILES_DIR = path.join(__dirname, 'private-raw');
 const KV_RAW_FILES_META_KEY = 'exhub:raw-files-meta';
 const KV_RAW_BODY_PREFIX = 'exhub:raw-body:';
 
+// file & dir untuk konfigurasi site & web-keys (Generate Key)
+const SITE_CONFIG_PATH = path.join(__dirname, 'config', 'site-config.json');
+const WEB_KEYS_PATH = path.join(__dirname, 'config', 'web-keys.json');
+const KV_SITE_CONFIG_KEY = 'exhub:site-config';
+const KV_WEB_KEYS_KEY = 'exhub:web-keys';
+
 // Konfigurasi halaman generatekey (Luarmor-style)
-const MAX_KEYS_PER_IP = parseInt(process.env.MAX_KEYS_PER_IP || '1', 10);
+const MAX_KEYS_PER_IP = parseInt(process.env.MAX_KEYS_PER_IP || '10', 10);
+const DEFAULT_KEY_HOURS = parseInt(process.env.DEFAULT_KEY_HOURS || '24', 10);
+// Set REQUIRE_ADS_CHECKPOINT=1 kalau ingin tombol "Get A New Key" hanya aktif
+// setelah user kembali dari Linkvertise (mis. redirect ke /generatekey?done=1).
+const REQUIRE_ADS_CHECKPOINT = process.env.REQUIRE_ADS_CHECKPOINT === '1';
+
 const GENERATEKEY_ADS_URL = process.env.GENERATEKEY_ADS_URL || '#';
 
 // ---- helper file lokal (fallback) ---------------------------------
@@ -241,6 +253,62 @@ function saveRawFilesToFile(list) {
     fs.writeFileSync(RAW_FILES_PATH, JSON.stringify(list, null, 2), 'utf8');
   } catch (err) {
     console.error('Failed to save raw-files.json (file):', err);
+  }
+}
+
+// file helper untuk site-config (defaultKeyHours, maxKeysPerIp)
+function loadSiteConfigFromFile() {
+  try {
+    if (!fs.existsSync(SITE_CONFIG_PATH)) return {};
+    const raw = fs.readFileSync(SITE_CONFIG_PATH, 'utf8');
+    if (!raw.trim()) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      return parsed;
+    }
+    return {};
+  } catch (err) {
+    console.error('Failed to load site-config.json (file):', err);
+    return {};
+  }
+}
+
+function saveSiteConfigToFile(cfg) {
+  try {
+    const dir = path.dirname(SITE_CONFIG_PATH);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(SITE_CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Failed to save site-config.json (file):', err);
+  }
+}
+
+// file helper untuk web-keys (generatekey)
+function loadWebKeysFromFile() {
+  try {
+    if (!fs.existsSync(WEB_KEYS_PATH)) return [];
+    const raw = fs.readFileSync(WEB_KEYS_PATH, 'utf8');
+    if (!raw.trim()) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    return [];
+  } catch (err) {
+    console.error('Failed to load web-keys.json (file):', err);
+    return [];
+  }
+}
+
+function saveWebKeysToFile(list) {
+  try {
+    const dir = path.dirname(WEB_KEYS_PATH);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(WEB_KEYS_PATH, JSON.stringify(list, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Failed to save web-keys.json (file):', err);
   }
 }
 
@@ -442,6 +510,90 @@ async function saveRawFiles(list) {
   saveRawFilesToFile(list);
 }
 
+// helper utama untuk site-config (defaultKeyHours, maxKeysPerIp)
+async function loadSiteConfig() {
+  const base = {
+    defaultKeyHours: DEFAULT_KEY_HOURS,
+    maxKeysPerIp: MAX_KEYS_PER_IP
+  };
+
+  if (hasKV) {
+    try {
+      const raw = await kvGet(KV_SITE_CONFIG_KEY);
+      if (raw && typeof raw === 'string') {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          return { ...base, ...parsed };
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load site-config from KV:', err);
+    }
+  }
+
+  const fileCfg = loadSiteConfigFromFile();
+  const merged = { ...base, ...fileCfg };
+
+  if (hasKV) {
+    try {
+      await kvSet(KV_SITE_CONFIG_KEY, JSON.stringify(merged));
+    } catch (err) {
+      console.error('Failed to seed site-config to KV:', err);
+    }
+  }
+
+  return merged;
+}
+
+async function saveSiteConfig(cfg) {
+  const merged = {
+    defaultKeyHours: Number.isFinite(cfg.defaultKeyHours)
+      ? cfg.defaultKeyHours
+      : DEFAULT_KEY_HOURS,
+    maxKeysPerIp: Number.isFinite(cfg.maxKeysPerIp)
+      ? cfg.maxKeysPerIp
+      : MAX_KEYS_PER_IP
+  };
+
+  const json = JSON.stringify(merged);
+  if (hasKV) {
+    try {
+      await kvSet(KV_SITE_CONFIG_KEY, json);
+    } catch (err) {
+      console.error('Failed to save site-config to KV:', err);
+    }
+  }
+  saveSiteConfigToFile(merged);
+}
+
+// helper utama untuk web-keys (Generate Key)
+async function loadWebKeys() {
+  if (hasKV) {
+    try {
+      const raw = await kvGet(KV_WEB_KEYS_KEY);
+      if (raw && typeof raw === 'string') {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (err) {
+      console.error('Failed to load web-keys from KV:', err);
+    }
+  }
+  return loadWebKeysFromFile();
+}
+
+async function saveWebKeys(list) {
+  const json = JSON.stringify(list);
+  if (hasKV) {
+    try {
+      await kvSet(KV_WEB_KEYS_KEY, json);
+    } catch (err) {
+      console.error('Failed to save web-keys to KV:', err);
+    }
+  }
+  saveWebKeysToFile(list);
+}
+
 // ---- helper body script (raw) -------------------------------------
 
 /**
@@ -610,6 +762,30 @@ async function removeRawBody(rawId) {
   } catch (err) {
     console.error('Failed to remove raw body local file:', err);
   }
+}
+
+// ---- util token & time-left ---------------------------------------
+
+function generateRandomToken(length = 32) {
+  const alphabet =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const bytes = crypto.randomBytes(length);
+  let token = '';
+  for (let i = 0; i < length; i++) {
+    const idx = bytes[i] % alphabet.length;
+    token += alphabet[idx];
+  }
+  return token;
+}
+
+function formatTimeLeft(diffMs) {
+  if (diffMs == null || diffMs <= 0) return 'Expired';
+  const totalSeconds = Math.floor(diffMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const pad = (n) => (n < 10 ? '0' + n : String(n));
+  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
 }
 
 // ---- stats helpers ------------------------------------------------
@@ -835,10 +1011,10 @@ async function buildAdminStats(period) {
         keyToken: u.keyToken || null,
         keyCreatedAt: u.keyCreatedAt || null,
         keyExpiresAt: u.keyExpiresAt || null,
-        mapName: u.mapName || null,           // REVISION
-        placeId: u.placeId || null,           // REVISION
-        serverId: u.serverId || null,         // REVISION
-        gameId: u.gameId || null,             // REVISION
+        mapName: u.mapName || null, // REVISION
+        placeId: u.placeId || null, // REVISION
+        serverId: u.serverId || null, // REVISION
+        gameId: u.gameId || null, // REVISION
         allMapList: Array.isArray(u.allMapList) ? u.allMapList : [] // REVISION
       };
     });
@@ -975,87 +1151,266 @@ app.get('/scripts', async (req, res) => {
 
 app.get('/generatekey', async (req, res) => {
   try {
-    const {
-      token,
-      createdAt,
-      expiresAt,
-      expiresAfter,
-      errorMessage
-    } = req.query;
+    const host = req.get('host') || '';
+    const baseUrl = `${req.protocol}://${host}`;
 
-    const safeToken = (token || '').trim();
-    const keys = [];
+    const ip =
+      (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
+      req.socket.remoteAddress ||
+      'unknown';
 
-    if (safeToken) {
-      const nowMs = Date.now();
+    const currentUserId = (req.query.userId || '').trim();
 
-      // Normalisasi expires (bisa dari expiresAfter (timestamp ms) atau expiresAt)
+    const siteConfig = await loadSiteConfig();
+    const defaultKeyHours =
+      typeof siteConfig.defaultKeyHours === 'number'
+        ? siteConfig.defaultKeyHours
+        : DEFAULT_KEY_HOURS;
+    const maxKeysPerIp =
+      typeof siteConfig.maxKeysPerIp === 'number'
+        ? siteConfig.maxKeysPerIp
+        : MAX_KEYS_PER_IP;
+
+    let webKeys = await loadWebKeys();
+    const nowMs = Date.now();
+
+    const cleanedKeys = [];
+    const myKeys = [];
+
+    for (const k of webKeys) {
+      if (!k || !k.token) continue;
+
+      const createdMs = Date.parse(k.createdAt || '') || 0;
       let expiresMs = null;
 
-      if (expiresAfter != null) {
-        const n = parseInt(expiresAfter, 10);
-        if (!Number.isNaN(n)) {
-          expiresMs = n;
-        }
-      } else if (expiresAt != null) {
-        const raw = String(expiresAt);
-        if (/^\d+$/.test(raw)) {
-          const n = parseInt(raw, 10);
-          if (!Number.isNaN(n)) {
-            expiresMs = n;
-          }
-        } else {
-          const d = new Date(raw);
-          const t = d.getTime();
-          if (!Number.isNaN(t)) {
-            expiresMs = t;
-          }
+      if (k.expiresAt) {
+        const t = Date.parse(k.expiresAt);
+        if (!Number.isNaN(t)) {
+          expiresMs = t;
         }
       }
 
-      let timeLeftLabel = 'N/A';
-      let statusLabel = 'Active';
-
-      if (expiresMs && Number.isFinite(expiresMs)) {
-        const diff = expiresMs - nowMs;
-        if (diff <= 0) {
-          statusLabel = 'Expired';
-          timeLeftLabel = 'Expired';
-        } else {
-          const totalMinutes = Math.floor(diff / 60000);
-          const hours = Math.floor(totalMinutes / 60);
-          const minutes = totalMinutes % 60;
-          if (hours > 0) {
-            timeLeftLabel = `${hours}h ${minutes}m`;
-          } else {
-            timeLeftLabel = `${minutes}m`;
-          }
-        }
+      if (!expiresMs && defaultKeyHours > 0) {
+        expiresMs = createdMs + defaultKeyHours * 60 * 60 * 1000;
       }
 
-      keys.push({
-        token: safeToken,
-        timeLeftLabel,
-        status: statusLabel
-      });
+      if (!createdMs && !expiresMs) continue;
+
+      if (expiresMs && expiresMs <= nowMs) {
+        // expired → GC
+        continue;
+      }
+
+      cleanedKeys.push(k);
+
+      if (k.ip === ip) {
+        const diff = expiresMs ? expiresMs - nowMs : 0;
+        myKeys.push({
+          token: k.token,
+          timeLeftLabel: expiresMs ? formatTimeLeft(diff) : '-',
+          status: 'Active'
+        });
+      }
     }
+
+    if (cleanedKeys.length !== webKeys.length) {
+      try {
+        await saveWebKeys(cleanedKeys);
+      } catch (err) {
+        console.error('Failed to save cleaned web-keys:', err);
+      }
+    }
+
+    // Optional gating: jika REQUIRE_ADS_CHECKPOINT=1, butuh ?done=1 / ?ok=1 sekali
+    let allowGenerate = true;
+    if (REQUIRE_ADS_CHECKPOINT) {
+      const fromAds =
+        req.query.done === '1' ||
+        req.query.ok === '1' ||
+        req.query.checkpoint === '1' ||
+        req.query.ads === '1';
+
+      if (fromAds) {
+        req.session.generateKeyAdsOk = true;
+      }
+
+      const sessionOk = !!req.session.generateKeyAdsOk;
+      allowGenerate = sessionOk || myKeys.length > 0;
+    }
+
+    const headerState = myKeys.length > 0 ? 'done' : 'start';
 
     return res.render('generatekey', {
       title: 'ExHub - Generate Key',
-      keys,
-      maxKeys: MAX_KEYS_PER_IP,
+      keys: myKeys,
+      maxKeys: maxKeysPerIp,
       adsUrl: GENERATEKEY_ADS_URL,
-      errorMessage: errorMessage || null
+      errorMessage: (req.query.errorMessage || '').trim() || null,
+      defaultKeyHours,
+      headerState,
+      headerTimerLabel: null,
+      allowGenerate,
+      keyAction: '/getkey/new',
+      currentUserId,
+      baseUrl,
+      requestHost: host
     });
   } catch (err) {
     console.error('Failed to render /generatekey:', err);
+    let defaultKeyHours = DEFAULT_KEY_HOURS;
+    let maxKeys = MAX_KEYS_PER_IP;
+    try {
+      const cfg = await loadSiteConfig();
+      if (typeof cfg.defaultKeyHours === 'number') {
+        defaultKeyHours = cfg.defaultKeyHours;
+      }
+      if (typeof cfg.maxKeysPerIp === 'number') {
+        maxKeys = cfg.maxKeysPerIp;
+      }
+    } catch (e) {
+      // ignore
+    }
+
     return res.status(500).render('generatekey', {
       title: 'ExHub - Generate Key',
       keys: [],
-      maxKeys: MAX_KEYS_PER_IP,
+      maxKeys,
       adsUrl: GENERATEKEY_ADS_URL,
-      errorMessage: 'Internal server error.'
+      errorMessage: 'Internal server error.',
+      defaultKeyHours,
+      headerState: 'start',
+      headerTimerLabel: null,
+      allowGenerate: !REQUIRE_ADS_CHECKPOINT,
+      keyAction: '/getkey/new',
+      currentUserId: '',
+      baseUrl: '',
+      requestHost: ''
     });
+  }
+});
+
+// Endpoint untuk benar-benar generate key baru (dipanggil dari tombol "Get A New Key")
+app.post('/getkey/new', async (req, res) => {
+  try {
+    const ip =
+      (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
+      req.socket.remoteAddress ||
+      'unknown';
+
+    const currentUserId = (req.body.userId || '').trim() || '';
+
+    const siteConfig = await loadSiteConfig();
+    const defaultKeyHours =
+      typeof siteConfig.defaultKeyHours === 'number'
+        ? siteConfig.defaultKeyHours
+        : DEFAULT_KEY_HOURS;
+    const maxKeysPerIp =
+      typeof siteConfig.maxKeysPerIp === 'number'
+        ? siteConfig.maxKeysPerIp
+        : MAX_KEYS_PER_IP;
+
+    // Optional gating: jika REQUIRE_ADS_CHECKPOINT=1 dan belum ada flag di session → tolak
+    if (REQUIRE_ADS_CHECKPOINT && !req.session.generateKeyAdsOk) {
+      const parts = [];
+      parts.push(
+        'errorMessage=' +
+          encodeURIComponent('Complete the ads step (Start) first.')
+      );
+      if (currentUserId) {
+        parts.push('userId=' + encodeURIComponent(currentUserId));
+      }
+      const qs = parts.length ? '?' + parts.join('&') : '';
+      return res.redirect('/generatekey' + qs);
+    }
+
+    let webKeys = await loadWebKeys();
+    const nowMs = Date.now();
+
+    const cleanedKeys = [];
+    let activeForIp = 0;
+
+    for (const k of webKeys) {
+      if (!k || !k.token) continue;
+
+      const createdMs = Date.parse(k.createdAt || '') || 0;
+      let expiresMs = null;
+
+      if (k.expiresAt) {
+        const t = Date.parse(k.expiresAt);
+        if (!Number.isNaN(t)) {
+          expiresMs = t;
+        }
+      }
+
+      if (!expiresMs && defaultKeyHours > 0) {
+        expiresMs = createdMs + defaultKeyHours * 60 * 60 * 1000;
+      }
+
+      if (!createdMs && !expiresMs) continue;
+
+      if (expiresMs && expiresMs <= nowMs) {
+        continue; // expired → skip
+      }
+
+      cleanedKeys.push(k);
+      if (k.ip === ip) {
+        activeForIp += 1;
+      }
+    }
+
+    webKeys = cleanedKeys;
+
+    if (activeForIp >= maxKeysPerIp) {
+      const msg =
+        'Limit active keys reached for this IP (' +
+        activeForIp +
+        '/' +
+        maxKeysPerIp +
+        ').';
+      const params = ['errorMessage=' + encodeURIComponent(msg)];
+      if (currentUserId) {
+        params.push('userId=' + encodeURIComponent(currentUserId));
+      }
+      const qs = params.length ? '?' + params.join('&') : '';
+      await saveWebKeys(webKeys);
+      return res.redirect('/generatekey' + qs);
+    }
+
+    const existingTokens = new Set(webKeys.map((k) => String(k.token)));
+    let token = '';
+    do {
+      token = generateRandomToken(32);
+    } while (existingTokens.has(token));
+
+    const createdAtIso = new Date().toISOString();
+    const expiresAtIso = new Date(
+      nowMs + defaultKeyHours * 60 * 60 * 1000
+    ).toISOString();
+
+    const newEntry = {
+      token,
+      ip,
+      userId: currentUserId || null,
+      createdAt: createdAtIso,
+      expiresAt: expiresAtIso
+    };
+
+    webKeys.push(newEntry);
+    await saveWebKeys(webKeys);
+
+    const params = [];
+    if (currentUserId) {
+      params.push('userId=' + encodeURIComponent(currentUserId));
+    }
+    const qs = params.length ? '?' + params.join('&') : '';
+    return res.redirect('/generatekey' + qs);
+  } catch (err) {
+    console.error('Failed to handle /getkey/new:', err);
+    const params = [
+      'errorMessage=' + encodeURIComponent('Failed to generate key.')
+    ];
+    const qs = params.length ? '?' + params.join('&') : '';
+    return res.redirect('/generatekey' + qs);
   }
 });
 
@@ -1613,6 +1968,7 @@ app.get('/api/isValidate/:key', async (req, res) => {
 
     const execUsers = await loadExecUsers();
     const redeemedList = await loadRedeemedKeys();
+    const webKeys = await loadWebKeys();
 
     // Cari data key dari exec-users (keyToken) terlebih dahulu
     let sourceExec = null;
@@ -1624,9 +1980,21 @@ app.get('/api/isValidate/:key', async (req, res) => {
       }
     }
 
-    // Kalau tidak ketemu di exec, cek redeemed-keys.json
-    let redeemed = null;
+    // Kalau tidak ketemu di exec, cek web-keys (generatekey)
+    let webEntry = null;
     if (!sourceExec) {
+      for (const k of webKeys) {
+        if (!k || !k.token) continue;
+        if (String(k.token).toUpperCase() === normKey) {
+          webEntry = k;
+          break;
+        }
+      }
+    }
+
+    // Kalau tidak ketemu di web-keys, cek redeemed-keys.json (sistem lama)
+    let redeemed = null;
+    if (!sourceExec && !webEntry) {
       for (const k of redeemedList) {
         if (!k || !k.key) continue;
         if (String(k.key).toUpperCase() === normKey) {
@@ -1637,7 +2005,7 @@ app.get('/api/isValidate/:key', async (req, res) => {
     }
 
     let valid = false;
-    let deleted = false; // saat ini belum ada konsep delete khusus → selalu false
+    let deleted = false; // belum ada konsep delete manual
     let info = null;
 
     // Helper konversi ke timestamp ms
@@ -1672,6 +2040,21 @@ app.get('/api/isValidate/:key', async (req, res) => {
         byIp: sourceExec.lastIp || '0.0.0.0',
         linkId: null,
         userId: sourceExec.userId ? Number(sourceExec.userId) : null,
+        expiresAfter: expiresMs
+      };
+    } else if (webEntry) {
+      const createdMs = toMs(webEntry.createdAt, nowMs);
+      const expiresMs = toMs(webEntry.expiresAt, null);
+      const expired = expiresMs != null && expiresMs <= nowMs;
+
+      valid = !expired;
+
+      info = {
+        token: normKey,
+        createdAt: createdMs,
+        byIp: webEntry.ip || '0.0.0.0',
+        linkId: webEntry.linkId || null,
+        userId: webEntry.userId ? Number(webEntry.userId) : null,
         expiresAfter: expiresMs
       };
     } else if (redeemed) {
@@ -2299,18 +2682,22 @@ app.get('/admin/api/exec-users', requireAdmin, async (req, res) => {
   }
 });
 
-app.get('/admin/api/exec-users/:scriptId', requireAdmin, async (req, res) => {
-  try {
-    const execUsers = await loadExecUsers();
-    const filtered = execUsers.filter(
-      (u) => u.scriptId === String(req.params.scriptId)
-    );
-    res.json({ data: filtered });
-  } catch (err) {
-    console.error('Failed to load exec users by scriptId:', err);
-    res.status(500).json({ error: 'exec_users_error' });
+app.get(
+  '/admin/api/exec-users/:scriptId',
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const execUsers = await loadExecUsers();
+      const filtered = execUsers.filter(
+        (u) => u.scriptId === String(req.params.scriptId)
+      );
+      res.json({ data: filtered });
+    } catch (err) {
+      console.error('Failed to load exec users by scriptId:', err);
+      res.status(500).json({ error: 'exec_users_error' });
+    }
   }
-});
+);
 
 // ===================================================================
 // Public endpoint untuk Private Raw Links: /:id.raw
