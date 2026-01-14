@@ -3,11 +3,18 @@
 <head>
   <meta charset="UTF-8" />
   <title><%= title || 'ExHub - Generate Key' %></title>
-  <meta name="viewport" content="width=device-box, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <link rel="icon" type="image/png" href="/img/ExLogo2.png" />
   <link rel="stylesheet" href="/css/main.css" />
 </head>
 <body class="page-dark">
+  <noscript>
+    <div class="key-alert key-alert-error" style="margin:16px;">
+      JavaScript is required on this page to copy keys. Please enable JavaScript.
+    </div>
+  </noscript>
+
   <div class="key-page">
     <div class="key-shell">
       <!-- ================= HEADER / HERO ================= -->
@@ -32,10 +39,8 @@
             (typeof headerTimerLabel !== 'undefined' && headerTimerLabel) || null;
 
           // Progress ala Luarmor (1 step):
-          //  - 0/1 jika belum checkpoint (belum klik Start / belum kembali dengan ?done=1)
+          //  - 0/1 jika belum checkpoint
           //  - 1/1 jika checkpoint sudah OK (headerState='done')
-          //  Setelah berhasil generate key, server akan reset checkpoint,
-          //  sehingga load berikutnya kembali 0/1 dan harus Start lagi.
           const totalSteps = 1;
           const stepsDone = _headerState === 'done' ? totalSteps : 0;
           const pctRaw = (stepsDone / totalSteps) * 100;
@@ -92,14 +97,27 @@
         <ol class="key-step-list">
           <li>Click <strong>Start</strong> to open ads / link-hub in a new tab.</li>
           <li>Complete all required steps in Linkvertise until it redirects back here.</li>
-          <li>Return to this page: <code><%= (typeof baseUrl !== 'undefined' ? baseUrl : requestHost || '') %>/generatekey</code>.</li>
+          <li>
+            Return to this page:
+            <code>
+              <%= (typeof baseUrl !== 'undefined' && baseUrl)
+                    ? baseUrl + '/generatekey'
+                    : ((requestHost || '') ? ('https://' + requestHost + '/generatekey') : '/generatekey') %>
+            </code>.
+          </li>
           <li>Click <strong>Get A New Key</strong> below to generate your token, then copy it into your ExHub loader / script.</li>
         </ol>
         <p class="key-note">
           Max
           <strong><%= (typeof maxKeys !== 'undefined' ? maxKeys : 1) %> active keys</strong>
-          per IP. Expired / deleted keys will not count against this limit.
+          per IP. Expired keys will not count against this limit.
         </p>
+        <% if (typeof currentUserId !== 'undefined' && currentUserId) { %>
+          <p class="key-note">
+            Current Roblox UserId filter:
+            <code><%= currentUserId %></code>
+          </p>
+        <% } %>
       </section>
 
       <!-- ================= BODY: LIST KEYS ================= -->
@@ -114,11 +132,13 @@
             </p>
           </div>
 
-          <!-- Form kecil (opsional) untuk filter/refresh by userId -->
+          <!-- Form kecil untuk filter/refresh by userId -->
           <form
             action="/generatekey"
             method="GET"
             class="key-new-form"
+            autocomplete="off"
+            novalidate
           >
             <input
               type="text"
@@ -127,6 +147,7 @@
               placeholder="Optional: Roblox UserId"
               value="<%= typeof currentUserId !== 'undefined' ? currentUserId : '' %>"
               autocomplete="off"
+              inputmode="numeric"
             />
             <button type="submit" class="key-btn key-btn-ghost">
               Refresh
@@ -236,23 +257,33 @@
       var buttons = document.querySelectorAll('[data-copy]');
       if (!buttons || !buttons.length) return;
 
+      function safeText(str, maxLen) {
+        if (typeof str !== 'string') str = String(str || '');
+        if (maxLen && maxLen > 0 && str.length > maxLen) {
+          return str.slice(0, maxLen);
+        }
+        return str;
+      }
+
       buttons.forEach(function (btn) {
         btn.addEventListener('click', function () {
           var token = btn.getAttribute('data-copy') || '';
+          token = safeText(token, 256); // guard length
+
           if (!token) return;
+
+          var prev = btn.textContent;
 
           if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard
               .writeText(token)
               .then(function () {
-                var prev = btn.textContent;
                 btn.textContent = 'Copied';
                 setTimeout(function () {
                   btn.textContent = prev;
                 }, 1200);
               })
               .catch(function () {
-                var prev = btn.textContent;
                 btn.textContent = 'Failed';
                 setTimeout(function () {
                   btn.textContent = prev;
@@ -262,8 +293,10 @@
             // Fallback lama (execCommand)
             var dummy = document.createElement('textarea');
             dummy.value = token;
+            dummy.setAttribute('readonly', '');
             dummy.style.position = 'fixed';
             dummy.style.opacity = '0';
+            dummy.style.zIndex = '-1';
             document.body.appendChild(dummy);
             dummy.select();
             try {
