@@ -117,6 +117,8 @@ async function syncScriptCountersToKV(script) {
 
 const SCRIPTS_PATH = path.join(__dirname, 'config', 'scripts.json');
 const REDEEMED_PATH = path.join(__dirname, 'config', 'redeemed-keys.json');
+// file untuk menyimpan daftar key yang dihapus manual (admin)
+const DELETED_PATH = path.join(__dirname, 'config', 'deleted-keys.json');
 // file untuk menyimpan data tracking eksekusi user (fallback lokal)
 const EXEC_USERS_PATH = path.join(__dirname, 'config', 'exec-users.json');
 
@@ -124,6 +126,7 @@ const EXEC_USERS_PATH = path.join(__dirname, 'config', 'exec-users.json');
 const SCRIPTS_RAW_DIR = path.join(__dirname, 'scripts-raw');
 const KV_SCRIPTS_META_KEY = 'exhub:scripts-meta';
 const KV_REDEEMED_KEY = 'exhub:redeemed-keys';
+const KV_DELETED_KEYS_KEY = 'exhub:deleted-keys';
 // key KV untuk data tracking eksekusi user (format legacy: array besar)
 const KV_EXEC_USERS_KEY = 'exhub:exec-users';
 // format baru: per-entry + index
@@ -212,6 +215,33 @@ function saveRedeemedToFile(list) {
     fs.writeFileSync(REDEEMED_PATH, JSON.stringify(list, null, 2), 'utf8');
   } catch (err) {
     console.error('Failed to save redeemed-keys.json (file):', err);
+  }
+}
+
+// file helper untuk deleted-keys (key yang dihapus manual)
+function loadDeletedFromFile() {
+  try {
+    if (!fs.existsSync(DELETED_PATH)) return [];
+    const raw = fs.readFileSync(DELETED_PATH, 'utf8');
+    if (!raw.trim()) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    return [];
+  } catch (err) {
+    console.error('Failed to load deleted-keys.json (file):', err);
+    return [];
+  }
+}
+
+function saveDeletedToFile(list) {
+  try {
+    const dir = path.dirname(DELETED_PATH);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(DELETED_PATH, JSON.stringify(list, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Failed to save deleted-keys.json (file):', err);
   }
 }
 
@@ -411,6 +441,34 @@ async function saveRedeemedKeys(list) {
     }
   }
   saveRedeemedToFile(list);
+}
+
+// helper utama untuk deleted-keys (key yang dihapus manual admin)
+async function loadDeletedKeys() {
+  if (hasKV) {
+    try {
+      const raw = await kvGet(KV_DELETED_KEYS_KEY);
+      if (raw && typeof raw === 'string') {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (err) {
+      console.error('Failed to load deleted keys from KV:', err);
+    }
+  }
+  return loadDeletedFromFile();
+}
+
+async function saveDeletedKeys(list) {
+  const json = JSON.stringify(list);
+  if (hasKV) {
+    try {
+      await kvSet(KV_DELETED_KEYS_KEY, json);
+    } catch (err) {
+      console.error('Failed to save deleted keys to KV:', err);
+    }
+  }
+  saveDeletedToFile(list);
 }
 
 // helper utama untuk exec-users (tracking user/player)
@@ -2199,6 +2257,7 @@ app.get('/api/isValidate/:key', async (req, res) => {
     const execUsers = await loadExecUsers();
     const redeemedList = await loadRedeemedKeys();
     const webKeys = await loadWebKeys();
+    const deletedList = await loadDeletedKeys();
 
     // Cari data key dari exec-users (keyToken) terlebih dahulu
     let sourceExec = null;
@@ -2234,8 +2293,18 @@ app.get('/api/isValidate/:key', async (req, res) => {
       }
     }
 
+    // Cek apakah pernah dihapus manual melalui Admin
+    let deletedEntry = null;
+    for (const d of deletedList) {
+      if (!d || !d.token) continue;
+      if (String(d.token).toUpperCase() === normKey) {
+        deletedEntry = d;
+        break;
+      }
+    }
+
     let valid = false;
-    let deleted = false; // belum ada konsep delete manual
+    let deleted = !!deletedEntry;
     let info = null;
 
     // Helper konversi ke timestamp ms
@@ -2304,6 +2373,26 @@ app.get('/api/isValidate/:key', async (req, res) => {
       // key tidak dikenal
       valid = false;
       info = null;
+    }
+
+    // Override jika pernah dihapus manual
+    if (deletedEntry) {
+      deleted = true;
+      valid = false;
+
+      const deletedAtMs = toMs(deletedEntry.deletedAt, nowMs);
+
+      if (!info) {
+        info = {
+          token: normKey,
+          createdAt: null,
+          byIp: deletedEntry.ip || '0.0.0.0',
+          linkId: null,
+          userId: null,
+          expiresAfter: null
+        };
+      }
+      info.deletedAt = deletedAtMs;
     }
 
     return res.json({
@@ -2972,6 +3061,40 @@ app.get('/admin/keys', requireAdmin, async (req, res) => {
   }
 });
 
+// Update default expiry (hours) dari admin-dashboardkey
+app.post('/admin/keys/update-default', requireAdmin, async (req, res) => {
+  try {
+    const raw = (req.body.defaultKeyHours || '').toString().trim();
+    let hours = parseInt(raw, 10);
+
+    const currentCfg = await loadSiteConfig();
+
+    if (!Number.isFinite(hours)) {
+      hours =
+        typeof currentCfg.defaultKeyHours === 'number'
+          ? currentCfg.defaultKeyHours
+          : DEFAULT_KEY_HOURS;
+    } else {
+      if (hours < 1) hours = 1;
+      if (hours > 168) hours = 168;
+    }
+
+    const updatedCfg = {
+      ...currentCfg,
+      defaultKeyHours: hours
+    };
+
+    await saveSiteConfig(updatedCfg);
+  } catch (err) {
+    console.error(
+      'Failed to update defaultKeyHours via /admin/keys/update-default:',
+      err
+    );
+  }
+
+  return res.redirect('/admin/keys');
+});
+
 // Delete semua key untuk 1 IP
 app.post('/admin/keys/delete-ip', requireAdmin, async (req, res) => {
   try {
@@ -2983,7 +3106,30 @@ app.post('/admin/keys/delete-ip', requireAdmin, async (req, res) => {
     }
 
     let webKeys = await loadWebKeys();
+    let deletedKeys = await loadDeletedKeys();
     const before = webKeys.length;
+    const nowIso = new Date().toISOString();
+
+    // simpan semua token yang dihapus ke deleted-keys
+    const toDelete = webKeys.filter((k) => k && k.ip === ip);
+    if (toDelete.length > 0) {
+      for (const k of toDelete) {
+        if (!k || !k.token) continue;
+        const tok = String(k.token);
+        const exists = deletedKeys.some(
+          (d) => d && String(d.token) === tok
+        );
+        if (!exists) {
+          deletedKeys.push({
+            token: tok,
+            deletedAt: nowIso,
+            ip: k.ip || ip,
+            reason: 'delete-ip'
+          });
+        }
+      }
+      await saveDeletedKeys(deletedKeys);
+    }
 
     webKeys = webKeys.filter((k) => k && k.ip !== ip);
 
@@ -3012,11 +3158,39 @@ app.post('/admin/keys/delete-key', requireAdmin, async (req, res) => {
     }
 
     let webKeys = await loadWebKeys();
+    let deletedKeys = await loadDeletedKeys();
     const before = webKeys.length;
+    const nowIso = new Date().toISOString();
 
-    webKeys = webKeys.filter(
-      (k) => !k || String(k.token) !== String(token)
-    );
+    let removedEntry = null;
+    const remaining = [];
+
+    for (const k of webKeys) {
+      if (!k) continue;
+      if (!removedEntry && String(k.token) === String(token)) {
+        removedEntry = k;
+        continue;
+      }
+      remaining.push(k);
+    }
+
+    webKeys = remaining;
+
+    if (removedEntry) {
+      const tok = String(removedEntry.token);
+      const exists = deletedKeys.some(
+        (d) => d && String(d.token) === tok
+      );
+      if (!exists) {
+        deletedKeys.push({
+          token: tok,
+          deletedAt: nowIso,
+          ip: removedEntry.ip || ip || 'unknown',
+          reason: 'delete-key'
+        });
+        await saveDeletedKeys(deletedKeys);
+      }
+    }
 
     if (webKeys.length !== before) {
       await saveWebKeys(webKeys);
