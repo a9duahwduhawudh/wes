@@ -1,39 +1,17 @@
 // serverv2.js
-// Modul fitur: Discord OAuth Login + Dashboard ExHub
+// Modul fitur: Discord OAuth Login + Dashboard ExHub + Get Free Key
 // DIPANGGIL dari server.js utama dengan: require("./serverv2")(app);
 
 const crypto = require("crypto");
 
-// =========================
-// Helper: bangun base API ExHub
-// =========================
-//
-// Konvensi ENV yang dipakai:
-// - EXHUB_API_BASE   → biasanya kamu isi "https://exc-webs.vercel.app"
-//                       (BASE SITE, tanpa /api) di Vercel sekarang.
-// - EXHUB_SITE_BASE  → opsional, kalau mau pisah jelas base site.
-//
-// Fungsi ini akan memastikan hasil akhirnya SELALU:
-//   https://exc-webs.vercel.app/api/
-// sehingga ketika dipakai:
-//   new URL("bot/user-info", EXHUB_API_BASE)
-// akan menjadi:
-//   https://exc-webs.vercel.app/api/bot/user-info
-//
+// Helper: bangun base API ExHub (sama pola dengan index.js bot)
 function resolveExHubApiBase() {
+  const SITE_BASE =
+    process.env.EXHUB_SITE_BASE || "https://exc-webs.vercel.app";
   let base = process.env.EXHUB_API_BASE;
-
   if (!base) {
-    const site = process.env.EXHUB_SITE_BASE || "https://exc-webs.vercel.app";
-    base = new URL("/api/", site).toString(); // site -> site/api/
-  } else {
-    // Kalau EXHUB_API_BASE tidak mengandung "/api", tambahkan otomatis
-    // contoh: "https://exc-webs.vercel.app" -> "https://exc-webs.vercel.app/api/"
-    if (!/\/api\/?$/i.test(base)) {
-      base = new URL("/api/", base).toString();
-    }
+    base = new URL("/api/", SITE_BASE).toString();
   }
-
   if (!base.endsWith("/")) base += "/";
   return base;
 }
@@ -42,37 +20,29 @@ module.exports = function mountDiscordOAuth(app) {
   // =========================
   // ENV
   // =========================
-  //
-  // PENTING:
-  // - DISCORD_CLIENT_ID       → Client ID APLIKASI OAUTH WEBSITE
-  // - DISCORD_CLIENT_SECRET   → Client Secret OAUTH
-  // - DISCORD_REDIRECT_URI    → HARUS sama dengan redirect di Discord Dev Portal,
-  //                             contoh: "https://exc-webs.vercel.app/auth/discord/callback"
-  //
-  // Bot Discord (index.js) tetap pakai:
-  // - DISCORD_TOKEN
-  // - CLIENT_ID (untuk bot)
-  //
-  const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || "";
-  const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || "";
+  const DISCORD_CLIENT_ID =
+    process.env.DISCORD_CLIENT_ID || process.env.CLIENT_ID;
+  const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
   const DISCORD_REDIRECT_URI =
     process.env.DISCORD_REDIRECT_URI ||
     "http://localhost:3000/auth/discord/callback";
 
   const EXHUB_API_BASE = resolveExHubApiBase();
 
+  // Optional: URL iklan Work.ink & Linkvertise
+  const WORKINK_ADS_URL =
+    process.env.WORKINK_ADS_URL ||
+    "https://link-hub.net/2995260/0xLAgWUZzCns";
+  const LINKVERTISE_ADS_URL =
+    process.env.LINKVERTISE_ADS_URL ||
+    "https://linkvertise.com/";
+
   if (!DISCORD_CLIENT_ID || !DISCORD_CLIENT_SECRET) {
     console.warn(
       "[serverv2] DISCORD_CLIENT_ID atau DISCORD_CLIENT_SECRET belum diset. " +
         "Fitur Discord Login tidak akan bekerja dengan benar."
     );
-  } else {
-    console.log(
-      `[serverv2] OAuth config OK. CLIENT_ID=${DISCORD_CLIENT_ID}, REDIRECT_URI=${DISCORD_REDIRECT_URI}`
-    );
   }
-
-  console.log("[serverv2] EXHUB_API_BASE (for /api/*):", EXHUB_API_BASE);
 
   // =========================
   // MIDDLEWARE: res.locals.user
@@ -125,7 +95,6 @@ module.exports = function mountDiscordOAuth(app) {
       const url = new URL("bot/user-info", EXHUB_API_BASE);
       const payload = {
         discordId: discordUser.id,
-        // Tag boleh apa saja, di server.js kita cuma pakai discordId sebagai kunci utama
         discordTag: discordUser.username,
       };
 
@@ -163,7 +132,7 @@ module.exports = function mountDiscordOAuth(app) {
       );
       result.active = activeKeys.length;
 
-      // premium = tier mengandung premium/VIP
+      // premium = tier === "premium"
       const premiumKeys = keys.filter((k) => {
         const tier = String(k.tier || k.type || "").toLowerCase();
         return tier.includes("premium") || tier.includes("vip");
@@ -224,11 +193,96 @@ module.exports = function mountDiscordOAuth(app) {
     res.render("dashboard", { keyData });
   });
 
-  // Contoh route yang wajib login (get-keyfree)
+  // Alias lama → baru (kalau ada link /get-keyfree lama)
   app.get("/get-keyfree", requireAuth, (req, res) => {
-    // Untuk sementara bisa pakai view sederhana.
-    // Nanti kamu bisa ganti isinya dengan desain seperti get-key.ejs Work.ink.
-    res.render("get-keyfree", {});
+    const ads = req.query.ads || "workink";
+    res.redirect("/getfreekey?ads=" + encodeURIComponent(ads));
+  });
+
+  // Halaman baru: Get Free Key (Work.ink / Linkvertise)
+  app.get("/getfreekey", requireAuth, async (req, res) => {
+    const discordUser = req.session.discordUser;
+    const rawAds = (req.query.ads || "workink").toLowerCase();
+
+    const adsProvider =
+      rawAds === "linkvertise" || rawAds === "linkvertise.com"
+        ? "linkvertise"
+        : "workink";
+
+    const adsUrl =
+      adsProvider === "linkvertise" ? LINKVERTISE_ADS_URL : WORKINK_ADS_URL;
+
+    // Ambil key yang sama seperti di dashboard, lalu mapping ke bentuk sederhana
+    const keyData = await getUserKeys(discordUser);
+    const maxKeys = 5;
+    const keys =
+      (keyData.keys || []).map((k) => ({
+        token: k.key,
+        timeLeftLabel: k.timeLeft || "-",
+        status: k.status || "Active",
+      })) || [];
+
+    const allowGenerate = keys.length < maxKeys;
+    const errorMessage = req.query.error || null;
+
+    res.render("getfreekey", {
+      title: "ExHub — Get Free Key",
+      user: discordUser,
+      adsProvider,
+      adsUrl,
+      keys,
+      maxKeys,
+      defaultKeyHours: 8,
+      allowGenerate,
+      currentUserId: discordUser.id,
+      keyAction: "/getfreekey/generate",
+      renewAction: "/getfreekey/extend",
+      errorMessage,
+    });
+  });
+
+  // POST generate key (stub, nanti bisa disambungkan ke ExHub API internal)
+  app.post("/getfreekey/generate", requireAuth, async (req, res) => {
+    const ads = (req.query.ads || "workink").toLowerCase();
+
+    try {
+      // TODO: panggil API internal ExHub untuk generate key di sini,
+      // misal: await fetch(EXHUB_API_BASE + "keys/generate", {...})
+
+      // Untuk sementara hanya redirect balik tanpa error
+      return res.redirect("/getfreekey?ads=" + encodeURIComponent(ads));
+    } catch (err) {
+      console.error("[serverv2] generate free key error:", err);
+      return res.redirect(
+        "/getfreekey?ads=" +
+          encodeURIComponent(ads) +
+          "&error=" +
+          encodeURIComponent("Failed to generate key.")
+      );
+    }
+  });
+
+  // POST extend key (stub, nanti sambungkan ke API internal kalau ada)
+  app.post("/getfreekey/extend", requireAuth, async (req, res) => {
+    const ads = (req.query.ads || "workink").toLowerCase();
+    const token = req.body && req.body.token;
+
+    try {
+      if (token) {
+        // TODO: panggil API internal ExHub untuk extend key,
+        // misal: await fetch(EXHUB_API_BASE + "keys/extend", {...})
+      }
+
+      return res.redirect("/getfreekey?ads=" + encodeURIComponent(ads));
+    } catch (err) {
+      console.error("[serverv2] extend free key error:", err);
+      return res.redirect(
+        "/getfreekey?ads=" +
+          encodeURIComponent(ads) +
+          "&error=" +
+          encodeURIComponent("Failed to extend key.")
+      );
+    }
   });
 
   // =========================
@@ -237,14 +291,6 @@ module.exports = function mountDiscordOAuth(app) {
 
   // Step 1: redirect ke Discord OAuth authorize
   app.get("/auth/discord", (req, res) => {
-    // Kalau config belum benar, jangan terusin supaya tidak bingung
-    if (!DISCORD_CLIENT_ID || !DISCORD_CLIENT_SECRET || !DISCORD_REDIRECT_URI) {
-      console.error(
-        "[serverv2] /auth/discord dipanggil tapi ENV OAuth belum lengkap."
-      );
-      return res.redirect("/discord-login?error=config");
-    }
-
     const state = crypto.randomBytes(16).toString("hex");
     if (req.session) {
       req.session.oauthState = state;
@@ -385,5 +431,5 @@ module.exports = function mountDiscordOAuth(app) {
     res.redirect("/");
   });
 
-  console.log("[serverv2] Discord OAuth + Dashboard routes mounted.");
+  console.log("[serverv2] Discord OAuth + Dashboard + GetFreeKey routes mounted.");
 };
