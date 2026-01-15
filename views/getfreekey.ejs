@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title><%= title || 'ExHub — Get Free Key' %></title>
+  <link rel="icon" type="image/png" href="/img/ExLogo2.png" />
+  <link rel="stylesheet" href="/css/mainv2.css" />
+</head>
+<body class="page-dark">
+
+<header class="site-header">
+  <div class="container header-inner">
+    <a href="/" class="logo">
+      <span class="logo-icon">
+        <img src="/img/ExLogo2.png" alt="ExHub Logo"
+             style="width:100%;height:100%;object-fit:cover;border-radius:12px;" />
+      </span>
+      <span class="logo-text">ExHub</span>
+    </a>
+
+    <nav class="header-nav">
+      <% if (typeof user !== 'undefined' && user) { %>
+        <div class="header-user">
+          <div class="header-user-pill">
+            <% if (user.avatar) { %>
+              <img
+                src="https://cdn.discordapp.com/avatars/<%= user.id %>/<%= user.avatar %>.png?size=64"
+                alt="Avatar"
+                class="header-user-avatar"
+              />
+            <% } else { %>
+              <span class="user-icon"></span>
+            <% } %>
+            <span class="user-name"><%= user.global_name %></span>
+          </div>
+          <form action="/logout" method="post" style="display:inline;">
+            <button type="submit" class="btn-ghost">Sign Out</button>
+          </form>
+        </div>
+      <% } %>
+    </nav>
+  </div>
+</header>
+
+<main class="page-main">
+  <div class="container getkey-layout">
+
+    <% 
+      const providerId =
+        (typeof adsProvider !== 'undefined' && adsProvider) || 'workink';
+      const providerName =
+        providerId === 'linkvertise' ? 'Linkvertise' : 'Work.ink';
+      const providerLogo =
+        providerId === 'linkvertise'
+          ? '/img/linkvertise.png'
+          : '/img/workink.jpg';
+      const totalSlots = maxKeys || 5;
+      const usedSlots = (keys && keys.length) || 0;
+      const validityHours = defaultKeyHours || 24;
+    %>
+
+    <!-- HERO SECTION -->
+    <section class="getkey-hero">
+      <div class="getkey-hero-left">
+        <p class="getkey-eyebrow">Get Free Key</p>
+        <h1 class="getkey-title">
+          Complete <span>Verification</span>
+        </h1>
+        <p class="getkey-subtitle">
+          Complete a quick verification to get your ExHub key and start using our scripts.
+        </p>
+
+        <ul class="getkey-bullets">
+          <li>HWID locked for better security.</li>
+          <li>Instant delivery right after verification.</li>
+          <li><%= validityHours %>h validity, extend anytime before expiry.</li>
+        </ul>
+      </div>
+
+      <div class="getkey-hero-right">
+        <div class="getkey-provider-card">
+          <div class="getkey-provider-main">
+            <div class="getkey-provider-logo-wrap">
+              <img
+                src="<%= providerLogo %>"
+                alt="<%= providerName %>"
+                class="getkey-provider-logo"
+              />
+            </div>
+            <div class="getkey-provider-text">
+              <p class="provider-name"><%= providerName %></p>
+              <p class="provider-caption">
+                Complete a short task and get rewarded. Takes less than 2 minutes.
+              </p>
+            </div>
+          </div>
+
+          <div class="getkey-provider-progress">
+            <div class="provider-progress-label">
+              <span>Progress</span>
+              <span>0 / 1</span>
+            </div>
+            <div class="provider-progress-bar">
+              <span class="provider-progress-fill"></span>
+            </div>
+          </div>
+
+          <div class="getkey-provider-actions">
+            <a
+              href="<%= adsUrl %>"
+              class="btn-getkey-main"
+              <% if (!allowGenerate) { %>data-disabled="true"<% } %>>
+              START
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- KEYS LIST / TABLE -->
+    <section class="getkey-keys-section">
+      <header class="getkey-keys-header">
+        <div>
+          <h2>Your Keys</h2>
+          <p class="getkey-keys-caption">
+            Your keys (<%= usedSlots %> / <%= totalSlots %>)
+          </p>
+        </div>
+        <div class="getkey-keys-cta">
+          <form method="post" action="<%= keyAction %>">
+            <% if (typeof currentUserId !== 'undefined' && currentUserId) { %>
+              <input type="hidden" name="userId" value="<%= currentUserId %>" />
+            <% } %>
+            <button
+              type="submit"
+              class="btn-subtle"
+              <% if (!allowGenerate) { %>disabled<% } %>>
+              Generate New Key
+            </button>
+          </form>
+        </div>
+      </header>
+
+      <% if (errorMessage) { %>
+        <div class="auth-error getkey-error"><%= errorMessage %></div>
+      <% } %>
+
+      <div class="getkey-keys-table">
+        <div class="getkey-row getkey-row--head">
+          <div>Key</div>
+          <div>Time Left</div>
+          <div>Status</div>
+          <div>Actions</div>
+        </div>
+
+        <% if (keys && keys.length > 0) { %>
+          <% keys.forEach(function(k) { %>
+            <div class="getkey-row">
+              <div class="getkey-key">
+                <code><%= k.token %></code>
+              </div>
+              <div class="getkey-time">
+                <%= k.timeLeftLabel || '-' %>
+              </div>
+              <div class="getkey-status">
+                <span class="badge <%= (k.status === 'Active' ? 'badge-active' : '') %>">
+                  <%= k.status || 'Active' %>
+                </span>
+              </div>
+              <div class="getkey-actions">
+                <button
+                  type="button"
+                  class="btn-icon-mini"
+                  onclick="navigator.clipboard.writeText('<%= k.token %>')">
+                  📋
+                </button>
+
+                <form method="post" action="<%= renewAction %>" class="inline-form">
+                  <% if (typeof currentUserId !== 'undefined' && currentUserId) { %>
+                    <input type="hidden" name="userId" value="<%= currentUserId %>" />
+                  <% } %>
+                  <input type="hidden" name="token" value="<%= k.token %>" />
+                  <button
+                    type="submit"
+                    class="btn-link-ghost"
+                    <% if (k.status === 'Expired') { %>disabled<% } %>>
+                    Extend
+                  </button>
+                </form>
+              </div>
+            </div>
+          <% }) %>
+        <% } else { %>
+          <div class="getkey-keys-empty">
+            No keys yet. Finish the verification above and click
+            <strong>Generate New Key</strong> to receive your first key.
+          </div>
+        <% } %>
+      </div>
+    </section>
+
+    <!-- FEATURE STRIP -->
+    <section class="getkey-feature-strip">
+      <div class="getkey-feature">
+        <span class="feature-icon">🛡️</span>
+        <div>
+          <h3>HWID Locked</h3>
+          <p>Keys are bound to your hardware for additional protection.</p>
+        </div>
+      </div>
+      <div class="getkey-feature">
+        <span class="feature-icon">⚡</span>
+        <div>
+          <h3>Instant Delivery</h3>
+          <p>Your key appears on this page as soon as you complete verification.</p>
+        </div>
+      </div>
+      <div class="getkey-feature">
+        <span class="feature-icon">⏰</span>
+        <div>
+          <h3><%= validityHours %>h Validity</h3>
+          <p>Extend your key anytime before expiry with a single click.</p>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+</body>
+</html>
