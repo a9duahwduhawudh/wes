@@ -20,18 +20,30 @@
 
     <nav class="header-nav">
       <% if (user) { %>
+        <!-- Sudah login: tampilkan user + Dashboard + Sign Out -->
         <div class="header-user">
-          <span class="header-user-pill">
-            <span class="user-icon"></span>
-            <span class="user-name"><%= user.global_name %></span>
-          </span>
-          <a href="/dashboard" class="btn btn-subtle">Dashboard</a>
+          <div class="header-user-pill">
+            <% if (user.avatar) { %>
+              <img
+                src="https://cdn.discordapp.com/avatars/<%= user.id %>/<%= user.avatar %>.png?size=64"
+                alt="Avatar"
+                class="header-user-avatar"
+              />
+            <% } else { %>
+              <span class="user-icon"></span>
+            <% } %>
+            <span class="user-name"><%= user.global_name || user.username %></span>
+          </div>
+          <a href="/dashboard" class="btn btn-subtle" style="margin:0 8px;">
+            Dashboard
+          </a>
           <form action="/logout" method="post" style="display:inline;">
             <button type="submit" class="btn btn-ghost">Sign Out</button>
           </form>
         </div>
       <% } else { %>
-        <a href="/discord-login" class="btn btn-ghost">Sign In</a>
+        <!-- Belum login: tombol langsung ke OAuth -->
+        <a href="/auth/discord" class="btn btn-ghost">Sign In</a>
       <% } %>
     </nav>
   </div>
@@ -43,25 +55,49 @@
       <div class="auth-icon">
         <span class="auth-avatar"></span>
       </div>
-      <h1 class="auth-title">Sign In</h1>
-      <p class="auth-subtitle">Connect with your Discord account to manage your ExHub keys.</p>
 
-      <% if (error) { %>
-        <div class="auth-error">
-          Something went wrong (code: <%= error %>). Please try again.
-        </div>
+      <% if (user) { %>
+        <!-- Sudah login: jangan minta OAuth lagi -->
+        <h1 class="auth-title">You are signed in</h1>
+        <p class="auth-subtitle">
+          Your Discord account is already connected. Go to your dashboard to manage keys.
+        </p>
+
+        <a href="/dashboard" class="btn btn-primary auth-button" style="margin-top:16px;">
+          Go to Dashboard
+        </a>
+
+        <p class="auth-footnote" style="margin-top:16px;">
+          If this is not your account, click <strong>Sign Out</strong> in the top-right corner
+          and then sign in again with a different Discord account.
+        </p>
+      <% } else { %>
+        <!-- Belum login: form Sign In normal -->
+        <h1 class="auth-title">Sign In</h1>
+        <p class="auth-subtitle">
+          Connect with your Discord account to manage your ExHub keys.
+        </p>
+
+        <% if (error) { %>
+          <div class="auth-error">
+            Something went wrong (code: <%= error %>). Please try again.
+          </div>
+        <% } %>
+
+        <a href="/auth/discord" class="btn btn-discord auth-button">
+          <span class="btn-discord-icon"></span>
+          <span>Sign in with Discord</span>
+        </a>
+
+        <p class="auth-footnote">
+          We will request access to your Discord username, avatar, email, and the servers you're in.
+        </p>
       <% } %>
-
-      <a href="/auth/discord" class="btn btn-discord auth-button">
-        <span class="btn-discord-icon"></span>
-        <span>Sign in with Discord</span>
-      </a>
-
-      <p class="auth-footnote">
-        We will request access to your Discord username, avatar, email, and the servers you're in.
-      </p>
     </div>
   </div>
 </main>
+
+<!-- Proteksi dasar: blokir klik kanan + beberapa shortcut DevTools -->
+<script src="/js/protect-devtools.js"></script>
 </body>
 </html>
