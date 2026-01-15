@@ -84,7 +84,7 @@
 
       // URL ADS – fallback hardcode jika adsUrl tidak dikirim dari server
       var adsDefaultWorkink     = 'https://work.ink/23P2/exhubfreekey';
-      var adsDefaultLinkvertise = 'https://linkvertise.com/access/2995260/uaE3u7P8CG5D';
+      var adsDefaultLinkvertise = 'https://link-target.net/2995260/uaE3u7P8CG5D';
       var adsUrlFromServer      = (typeof adsUrl !== 'undefined' && adsUrl) ? adsUrl : null;
       var adsUrlSafe = adsUrlFromServer ||
         (providerId === 'linkvertise' ? adsDefaultLinkvertise : adsDefaultWorkink);
@@ -134,7 +134,7 @@
           <div class="getkey-provider-progress">
             <div class="provider-progress-label">
               <span>Progress</span>
-              <span><%= adsProgressUiDone ? '1 / 1' : '0 / 1' %></span>
+              <span class="provider-progress-value"><%= adsProgressUiDone ? '1 / 1' : '0 / 1' %></span>
             </div>
             <div class="provider-progress-bar<%= adsProgressUiDone ? ' provider-progress-bar--done' : '' %>">
               <span class="provider-progress-fill"></span>
@@ -281,7 +281,7 @@
       </div>
     </section>
 
-    <!-- CTA BAWAH – GENERATE FREE KEY DI TENGAH (mirip Get A New Key di generatekey) -->
+    <!-- CTA BAWAH – GENERATE FREE KEY DI TENGAH -->
     <section class="getkey-cta-main" style="margin-top:24px;">
       <div style="text-align:center;">
         <form
@@ -339,7 +339,7 @@
 })();
 </script>
 
-<!-- SCRIPT 1: Tombol Copy / Renew (2-in-1, mirip generatekey.ejs) -->
+<!-- SCRIPT 1: Tombol Copy / Renew (2-in-1) -->
 <script>
 (function () {
   var buttons = document.querySelectorAll('[data-copy-or-renew]');
@@ -528,6 +528,99 @@
     newKeyForm.addEventListener('submit', function () {
       disableAllRenewButtons();
       disableButton(newKeyBtn);
+    });
+  }
+})();
+</script>
+
+<!-- SCRIPT 4: Anti-spam "Open" dari Linkvertise/Work.Ink (mirip konsep generatekey) -->
+<script>
+(function () {
+  var PROVIDER_ID        = '<%= providerId %>';
+  var ADS_DONE_SERVER    = <%= adsDoneFromServer ? 'true' : 'false' %>;
+  var ADS_USED_SERVER    = <%= adsUsedFromServer ? 'true' : 'false' %>;
+  var STORAGE_KEY        = 'exhub_freekey_checkpoint_' + PROVIDER_ID;
+  var ANTI_SPAM_WINDOWMS = 5 * 60 * 1000; // 5 menit: tahan spam Open dalam window ini
+
+  function getCheckpointUsedAt() {
+    try {
+      var v = window.localStorage.getItem(STORAGE_KEY);
+      if (!v) return 0;
+      var n = parseInt(v, 10);
+      return isNaN(n) ? 0 : n;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function markCheckpointConsumedNow() {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, String(Date.now()));
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  // Hook ketika Generate atau Renew disubmit → tandai checkpoint ini sudah "dipakai"
+  var newKeyForm = document.querySelector('form[data-new-key-form="1"]');
+  if (newKeyForm) {
+    newKeyForm.addEventListener('submit', function () {
+      markCheckpointConsumedNow();
+    });
+  }
+
+  var renewForms = document.querySelectorAll('form[data-renew-form="1"]');
+  if (renewForms && renewForms.length) {
+    renewForms.forEach(function (form) {
+      form.addEventListener('submit', function () {
+        markCheckpointConsumedNow();
+      });
+    });
+  }
+
+  // Anti-spam:
+  // Jika server bilang checkpoint DONE & belum used,
+  // tapi secara lokal kita baru saja memakai checkpoint ini (<5 menit),
+  // artinya kemungkinan besar ini hanyalah spam "Open" dari ads
+  // → UI dihaluskan: treat as already consumed (disable Generate & Renew, progress tetap 0/1).
+  var usedAt = getCheckpointUsedAt();
+  var now    = Date.now();
+  var recentlyConsumed = usedAt && (now - usedAt < ANTI_SPAM_WINDOWMS);
+
+  if (ADS_DONE_SERVER && !ADS_USED_SERVER && recentlyConsumed) {
+    // Override tampilan progress → 0/1
+    var progressValue = document.querySelector('.provider-progress-value');
+    var progressBar   = document.querySelector('.provider-progress-bar');
+    if (progressValue) {
+      progressValue.textContent = '0 / 1';
+    }
+    if (progressBar) {
+      progressBar.classList.remove('provider-progress-bar--done');
+    }
+
+    // Update helper text supaya jelas ke user
+    var helper = document.querySelector('.getkey-helper-text');
+    if (helper) {
+      helper.innerHTML =
+        'Your last verification has already been used in this browser. ' +
+        'If you really want a new free key, run <strong>START</strong> from the ads page again ' +
+        'after a short delay.';
+    }
+
+    // Disable Generate Free Key
+    var newKeyBtn = newKeyForm
+      ? newKeyForm.querySelector('button[type="submit"]')
+      : null;
+    if (newKeyBtn) {
+      newKeyBtn.disabled = true;
+      newKeyBtn.setAttribute('aria-disabled', 'true');
+    }
+
+    // Disable semua tombol Renew (mode renew)
+    var renewButtons = document.querySelectorAll('[data-copy-or-renew][data-mode="renew"]');
+    renewButtons.forEach(function (btn) {
+      btn.disabled = true;
+      btn.setAttribute('aria-disabled', 'true');
     });
   }
 })();
