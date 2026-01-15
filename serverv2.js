@@ -139,7 +139,7 @@ async function createFreeKeyRecordPersistent({ userId, provider, ip }) {
   const rec = {
     token,
     userId: String(userId),
-    provider,
+    provider, // 'workink' atau 'linkvertise'
     createdAt,
     byIp: ip || null,
     linkId: null,
@@ -180,9 +180,28 @@ async function extendFreeKeyPersistent(token) {
   return rec;
 }
 
+// Tandai free key sebagai deleted (untuk endpoint delete)
+async function deleteFreeKeyPersistent(token, userIdCheck) {
+  const key = tokenKey(token);
+  const rec = await kvGetJson(key);
+  if (!rec) return { ok: true, updated: false };
+
+  if (userIdCheck && String(rec.userId) !== String(userIdCheck)) {
+    return { ok: false, reason: "USER_MISMATCH" };
+  }
+
+  rec.deleted = true;
+  rec.valid = false;
+
+  await kvSetJson(key, rec);
+  return { ok: true, updated: true };
+}
+
 // Ambil semua free key milik user dari KV
-// Return: [{ token, timeLeftLabel, status, expiresAfter }]
+// Return: [{ token, provider, timeLeftLabel, status, expiresAfter, tier }]
 async function getFreeKeysForUserPersistent(userId) {
+  if (!hasFreeKeyKV) return [];
+
   const idxKey = userIndexKey(userId);
   const index = await kvGetJson(idxKey);
   const tokens = Array.isArray(index) ? index : [];
@@ -194,8 +213,11 @@ async function getFreeKeysForUserPersistent(userId) {
     const rec = await kvGetJson(tokenKey(token));
     if (!rec) continue;
 
+    // Skip jika sudah dihapus
+    if (rec.deleted) continue;
+
     const msLeft = rec.expiresAfter - now;
-    const isExpired = msLeft <= 0 || rec.deleted;
+    const isExpired = msLeft <= 0;
 
     const timeLeftLabel = isExpired
       ? "Expired"
@@ -207,11 +229,19 @@ async function getFreeKeysForUserPersistent(userId) {
       ? Math.floor(msLeft / 60000) + "m"
       : Math.floor(msLeft / 3600000) + "h";
 
+    // Normalisasi provider untuk tampilan
+    let providerLabel = rec.provider || "ExHub Free";
+    const p = String(providerLabel).toLowerCase();
+    if (p === "workink" || p === "work.ink") providerLabel = "Work.ink";
+    else if (p.indexOf("linkvertise") !== -1) providerLabel = "Linkvertise";
+
     result.push({
       token: rec.token,
+      provider: providerLabel,
       timeLeftLabel,
       status: isExpired ? "Expired" : "Active",
       expiresAfter: rec.expiresAfter,
+      tier: "Free",
     });
   }
 
@@ -268,8 +298,7 @@ function markAdsUsed(req, provider) {
     ts: nowMs(),
     used: false,
   };
-  // Tidak ubah ts di sini, supaya ts
-  // tetap waktu checkpoint (iklan) terakhir.
+  // Tidak ubah ts di sini, supaya ts tetap waktu checkpoint terakhir
   prev.used = true;
   req.session.freeKeyAdsState[provider] = prev;
 }
@@ -342,18 +371,22 @@ module.exports = function mountDiscordOAuth(app) {
     next();
   }
 
-  // Ambil data key user dari ExHub API (untuk dashboard utama)
+  // Ambil data key user dari ExHub API + Free Key KV (untuk dashboard)
   async function getUserKeys(discordUser) {
     const result = {
       total: 0,
       active: 0,
       premium: 0,
-      linked: 0,
       keys: [],
+      banned: false,
     };
 
     if (!discordUser) return result;
 
+    let apiKeysRaw = [];
+    let bannedFlag = false;
+
+    // --- Paid / main keys dari API ExHub ---
     try {
       const url = new URL("bot/user-info", EXHUB_API_BASE);
       const payload = {
@@ -374,58 +407,115 @@ module.exports = function mountDiscordOAuth(app) {
           res.status,
           text.slice(0, 200)
         );
-        return result;
+      } else {
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          console.warn("[serverv2] user-info bukan JSON valid.");
+          data = null;
+        }
+
+        if (data) {
+          if (Array.isArray(data.keys)) {
+            apiKeysRaw = data.keys;
+          }
+          if (typeof data.banned === "boolean") {
+            bannedFlag = data.banned;
+          }
+        }
       }
-
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        console.warn("[serverv2] user-info bukan JSON valid.");
-        return result;
-      }
-
-      const keys = Array.isArray(data.keys) ? data.keys : [];
-      result.total = keys.length;
-      result.linked = keys.length;
-
-      const activeKeys = keys.filter(
-        (k) => !k.deleted && k.valid !== false && k.revoked !== true
-      );
-      result.active = activeKeys.length;
-
-      const premiumKeys = keys.filter((k) => {
-        const tier = String(k.tier || k.type || "").toLowerCase();
-        return tier.includes("premium") || tier.includes("vip");
-      });
-      result.premium = premiumKeys.length;
-
-      result.keys = keys.map((k) => {
-        const label =
-          k.key ||
-          k.token ||
-          k.keyToken ||
-          k.id ||
-          (typeof k === "string" ? k : JSON.stringify(k));
-        return {
-          key: String(label),
-          provider: k.provider || k.source || "ExHub",
-          timeLeft: k.timeLeft || "-",
-          status:
-            k.deleted || k.revoked
-              ? "Deleted"
-              : k.valid === false
-              ? "Invalid"
-              : "Active",
-          tier: k.tier || "Free",
-        };
-      });
-
-      return result;
     } catch (err) {
-      console.error("[serverv2] getUserKeys error:", err);
-      return result;
+      console.error("[serverv2] getUserKeys API error:", err);
     }
+
+    // --- Normalisasi paid keys ---
+    const normalizedPaid = apiKeysRaw.map((k) => {
+      const label =
+        k.key ||
+        k.token ||
+        k.keyToken ||
+        k.id ||
+        (typeof k === "string" ? k : JSON.stringify(k));
+
+      const providerRaw = k.provider || k.source || "ExHub";
+      let providerLabel = providerRaw;
+      const p = String(providerLabel).toLowerCase();
+      if (p === "workink" || p === "work.ink") providerLabel = "Work.ink";
+      else if (p.indexOf("linkvertise") !== -1) providerLabel = "Linkvertise";
+
+      const tierRaw = k.tier || k.type || "Paid";
+      const tierLabel = tierRaw;
+
+      const statusLabel =
+        k.deleted || k.revoked
+          ? "Deleted"
+          : k.valid === false
+          ? "Invalid"
+          : "Active";
+
+      // cari timestamp expired (jika ada)
+      let expiresAtMs = null;
+      if (typeof k.expiresAtMs !== "undefined" && k.expiresAtMs != null) {
+        const tmp = parseInt(k.expiresAtMs, 10);
+        if (!isNaN(tmp)) expiresAtMs = tmp;
+      } else if (
+        typeof k.expiresAfter !== "undefined" &&
+        k.expiresAfter != null
+      ) {
+        const tmp = parseInt(k.expiresAfter, 10);
+        if (!isNaN(tmp)) expiresAtMs = tmp;
+      } else if (typeof k.expiresAt !== "undefined" && k.expiresAt != null) {
+        const tmp = parseInt(k.expiresAt, 10);
+        if (!isNaN(tmp)) expiresAtMs = tmp;
+      }
+
+      return {
+        key: String(label),
+        provider: providerLabel,
+        timeLeft: k.timeLeft || "-",
+        status: statusLabel,
+        tier: tierLabel,
+        expiresAtMs: expiresAtMs || null,
+        expiresAfter: expiresAtMs || null,
+        free: false,
+      };
+    });
+
+    // --- Free keys dari KV Upstash ---
+    let freeKeys = [];
+    try {
+      freeKeys = await getFreeKeysForUserPersistent(discordUser.id);
+    } catch (err) {
+      console.error("[serverv2] getFreeKeysForUserPersistent error:", err);
+    }
+
+    const normalizedFree = freeKeys.map((fk) => ({
+      key: fk.token,
+      provider: fk.provider || "ExHub Free",
+      timeLeft: fk.timeLeftLabel || "-",
+      status: fk.status || "Active",
+      tier: fk.tier || "Free",
+      expiresAtMs: fk.expiresAfter || null,
+      expiresAfter: fk.expiresAfter || null,
+      free: true,
+    }));
+
+    // --- Gabungkan semua ---
+    const allKeys = normalizedPaid.concat(normalizedFree);
+
+    result.keys = allKeys;
+    result.total = allKeys.length;
+    result.active = allKeys.filter(
+      (k) => (k.status || "").toLowerCase() === "active"
+    ).length;
+    result.premium = allKeys.filter((k) => {
+      const tier = String(k.tier || "").toLowerCase();
+      return tier && tier.indexOf("free") === -1;
+    }).length;
+    result.banned = bannedFlag;
+
+    return result;
   }
 
   // =========================
@@ -513,7 +603,7 @@ module.exports = function mountDiscordOAuth(app) {
     // Free key dari KV (persisten, key di bawah exhub:freekey:*)
     const freeKeys = await getFreeKeysForUserPersistent(userId);
     const maxKeys = FREE_KEY_MAX_PER_USER;
-    const keys = freeKeys; // {token,timeLeftLabel,status,expiresAfter}
+    const keys = freeKeys; // {token,provider,timeLeftLabel,status,expiresAfter}
 
     const capacityOk = keys.length < maxKeys;
 
@@ -663,9 +753,8 @@ module.exports = function mountDiscordOAuth(app) {
 
   // --------------------------------------------------
   // API: GET /api/freekey/isValidate/:key
-  // Pola JSON mirip /api/isValidate di server.js:
-  // { valid, deleted, expired, info: { token, createdAt, byIp, userId, expiresAfter, linkId } }
-  // --------------------------------------------------
+  // { valid, deleted, expired, info: {...} }
+// --------------------------------------------------
   app.get("/api/freekey/isValidate/:key", async (req, res) => {
     const token = (req.params.key || "").trim();
     const now = nowMs();
@@ -707,6 +796,34 @@ module.exports = function mountDiscordOAuth(app) {
         expiresAfter: rec.expiresAfter,
       },
     });
+  });
+
+  // --------------------------------------------------
+  // API: POST /api/freekey/delete/:key
+  // Dipanggil dari dashboard ( tombol Delete ) untuk Free Key.
+// --------------------------------------------------
+  app.post("/api/freekey/delete/:key", requireAuth, async (req, res) => {
+    const discordUser = req.session.discordUser;
+    const userId = discordUser.id;
+    const token = (req.params.key || "").trim();
+
+    if (!token) {
+      return res.status(400).json({ ok: false, error: "TOKEN_REQUIRED" });
+    }
+
+    try {
+      const result = await deleteFreeKeyPersistent(token, userId);
+      if (!result.ok && result.reason === "USER_MISMATCH") {
+        return res
+          .status(403)
+          .json({ ok: false, error: "NOT_OWNER_OF_KEY" });
+      }
+
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("[serverv2] delete free key error:", err);
+      return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
+    }
   });
 
   // =========================
@@ -816,7 +933,7 @@ module.exports = function mountDiscordOAuth(app) {
         // tidak fatal
       }
 
-      // Tambahkan banner ke session untuk dipakai dashboard.ejs
+      // Banner juga disimpan supaya bisa dipakai di dashboard.ejs
       req.session.discordUser = {
         id: user.id,
         username: user.username,
@@ -825,7 +942,7 @@ module.exports = function mountDiscordOAuth(app) {
         avatar: user.avatar,
         email: user.email,
         guildCount,
-        banner: user.banner, // <— field baru untuk Banner
+        banner: user.banner || null,
       };
 
       res.redirect("/dashboard");
