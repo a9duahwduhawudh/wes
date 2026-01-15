@@ -5,7 +5,7 @@
 const crypto = require("crypto");
 
 // ---------------------------------------------------------
-// Helper: bangun base API ExHub (sama pola dengan index.js bot)
+// Helper: base API ExHub (sama pola dengan index.js bot)
 // ---------------------------------------------------------
 function resolveExHubApiBase() {
   const SITE_BASE =
@@ -20,11 +20,12 @@ function resolveExHubApiBase() {
 
 // ---------------------------------------------------------
 // Konfigurasi Free Key (in-memory store)
-// (Jika proses restart / diganti instance, data akan reset)
+// (Jika proses restart / multi-instance load balancing,
+//  map ini tidak persisten – ini hanya untuk 1 instance proses.)
 // ---------------------------------------------------------
 
 const FREE_KEY_PREFIX = "EXHUBFREE";
-const FREE_KEY_TTL_HOURS = 3; // default 3 jam
+const FREE_KEY_TTL_HOURS = 3;            // default 3 jam
 const FREE_KEY_MAX_PER_USER = 5;
 
 // REQUIREFREEKEY_ADS_CHECKPOINT = "1" (default) → wajib iklan dulu
@@ -94,6 +95,7 @@ function extendFreeKey(token) {
 }
 
 // Ambil semua free key milik user dari store
+// Return: [{ token, timeLeftLabel, status, expiresAfter }]
 function getFreeKeysForUser(userId) {
   const result = [];
   const now = nowMs();
@@ -119,7 +121,7 @@ function getFreeKeysForUser(userId) {
       token: rec.token,
       timeLeftLabel,
       status: isExpired ? "Expired" : "Active",
-      raw: rec,
+      expiresAfter: rec.expiresAfter,
     });
   }
 
@@ -128,9 +130,7 @@ function getFreeKeysForUser(userId) {
     const sa = a.status === "Active" ? 0 : 1;
     const sb = b.status === "Active" ? 0 : 1;
     if (sa !== sb) return sa - sb;
-    const ta = a.raw.expiresAfter;
-    const tb = b.raw.expiresAfter;
-    return ta - tb;
+    return a.expiresAfter - b.expiresAfter;
   });
 
   return result;
@@ -139,7 +139,7 @@ function getFreeKeysForUser(userId) {
 // ---------------------------------------------------------
 // Helper: Ads / checkpoint state di session
 // Struktur: req.session.freeKeyAdsState = {
-//   workink: { ts: <number>, used: <bool> },
+//   workink:    { ts: <number>, used: <bool> },
 //   linkvertise: { ts: <number>, used: <bool> }
 // }
 // ---------------------------------------------------------
@@ -180,6 +180,9 @@ function markAdsUsed(req, provider) {
   req.session.freeKeyAdsState[provider] = prev;
 }
 
+// ---------------------------------------------------------
+// Modul utama
+// ---------------------------------------------------------
 module.exports = function mountDiscordOAuth(app) {
   // =========================
   // ENV
@@ -195,8 +198,7 @@ module.exports = function mountDiscordOAuth(app) {
 
   // URL iklan Work.ink & Linkvertise (untuk tombol START)
   const WORKINK_ADS_URL =
-    process.env.WORKINK_ADS_URL ||
-    "https://work.ink/23P2/exhubfreekey";
+    process.env.WORKINK_ADS_URL || "https://work.ink/23P2/exhubfreekey";
   const LINKVERTISE_ADS_URL =
     process.env.LINKVERTISE_ADS_URL ||
     "https://linkvertise.com/access/2995260/uaE3u7P8CG5D";
@@ -367,6 +369,7 @@ module.exports = function mountDiscordOAuth(app) {
     const queryAds = req.query.ads;
     let adsProvider = canonicalAdsProvider(queryAds);
 
+    // Simpan/ambil provider terakhir di session
     if (req.session) {
       if (queryAds) {
         req.session.lastFreeKeyAdsProvider = adsProvider;
@@ -383,8 +386,8 @@ module.exports = function mountDiscordOAuth(app) {
 
     // State ads dari session
     const adsState = getAdsState(req, adsProvider);
-    const adsProgressDone = !!adsState;
-    const adsUsed = !!(adsState && adsState.used);
+    const adsProgressDone = !!adsState; // sudah punya checkpoint
+    const adsUsed = !!(adsState && adsState.used); // checkpoint sudah dipakai?
 
     const adsUrl =
       adsProvider === "linkvertise" ? LINKVERTISE_ADS_URL : WORKINK_ADS_URL;
@@ -392,14 +395,11 @@ module.exports = function mountDiscordOAuth(app) {
     // Free key dari in-memory store
     const freeKeys = getFreeKeysForUser(userId);
     const maxKeys = FREE_KEY_MAX_PER_USER;
-    const keys = freeKeys.map((k) => ({
-      token: k.token,
-      timeLeftLabel: k.timeLeftLabel,
-      status: k.status,
-    }));
+    const keys = freeKeys; // sudah berbentuk {token,timeLeftLabel,status,expiresAfter}
 
     const capacityOk = keys.length < maxKeys;
 
+    // Satu checkpoint -> tepat 1 aksi (Generate ATAU Renew)
     const allowGenerate =
       capacityOk &&
       (!REQUIRE_FREEKEY_ADS_CHECKPOINT || (adsProgressDone && !adsUsed));
@@ -445,7 +445,7 @@ module.exports = function mountDiscordOAuth(app) {
         return res.redirect(
           redirectBase +
             "&error=" +
-            encodeURIComponent("Key slot penuh. Hapus / biarkan expired dulu.")
+            encodeURIComponent("Key slot penuh. Biarkan beberapa key expired dulu.")
         );
       }
 
@@ -464,6 +464,7 @@ module.exports = function mountDiscordOAuth(app) {
       const ip = String(ipHeader).split(",")[0].trim();
       createFreeKeyRecord({ userId, provider: adsProvider, ip });
 
+      // Satu checkpoint habis dipakai 1 aksi
       markAdsUsed(req, adsProvider);
 
       return res.redirect(redirectBase);
@@ -518,6 +519,7 @@ module.exports = function mountDiscordOAuth(app) {
       }
 
       extendFreeKey(token);
+      // Satu checkpoint habis dipakai 1 aksi
       markAdsUsed(req, adsProvider);
 
       return res.redirect(redirectBase);
