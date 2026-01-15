@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title><%= title || 'ExHub — Get Free Key' %></title>
+  <title><%= typeof title !== 'undefined' && title ? title : 'ExHub — Get Free Key' %></title>
   <link rel="icon" type="image/png" href="/img/ExLogo2.png" />
   <link rel="stylesheet" href="/css/mainv2.css" />
 </head>
@@ -29,15 +29,15 @@
                 alt="Avatar"
                 class="header-user-avatar"
               />
-            <% } else { %>
-              <span class="user-icon"></span>
             <% } %>
-            <span class="user-name"><%= user.global_name %></span>
+            <span class="user-name"><%= user.global_name || user.username %></span>
           </div>
           <form action="/logout" method="post" style="display:inline;">
-            <button type="submit" class="btn-ghost">Sign Out</button>
+            <button type="submit" class="btn btn-ghost">Sign Out</button>
           </form>
         </div>
+      <% } else { %>
+        <a href="/auth/discord" class="btn btn-primary">Sign in with Discord</a>
       <% } %>
     </nav>
   </div>
@@ -46,18 +46,45 @@
 <main class="page-main">
   <div class="container getkey-layout">
 
-    <% 
-      const providerId =
-        (typeof adsProvider !== 'undefined' && adsProvider) || 'workink';
-      const providerName =
-        providerId === 'linkvertise' ? 'Linkvertise' : 'Work.ink';
-      const providerLogo =
-        providerId === 'linkvertise'
-          ? '/img/linkvertise.png'
-          : '/img/workink.jpg';
-      const totalSlots = maxKeys || 5;
-      const usedSlots = (keys && keys.length) || 0;
-      const validityHours = defaultKeyHours || 24;
+    <%
+      // =========================
+      //  VARIABEL DEFENSIF
+      // =========================
+      var providerId = (typeof adsProvider !== 'undefined' && adsProvider)
+        ? String(adsProvider).toLowerCase()
+        : 'workink';
+
+      if (providerId !== 'linkvertise') providerId = 'workink';
+
+      var providerName = (providerId === 'linkvertise') ? 'Linkvertise' : 'Work.ink';
+      var providerLogo = (providerId === 'linkvertise')
+        ? '/img/linkvertise.png'
+        : '/img/workink.jpg';
+
+      var totalSlots = (typeof maxKeys !== 'undefined' && maxKeys) ? maxKeys : 5;
+      var keysList   = (typeof keys !== 'undefined' && keys && keys.length) ? keys : [];
+      var usedSlots  = keysList.length;
+      var validityHours = (typeof defaultKeyHours !== 'undefined' && defaultKeyHours) ? defaultKeyHours : 8;
+
+      // allowGenerate biasanya sudah di-set server (sinkron dengan REQUIREFREEKEY_ADS_CHECKPOINT)
+      var canGenerate = (typeof allowGenerate !== 'undefined')
+        ? !!allowGenerate
+        : (usedSlots < totalSlots);
+
+      var currentId   = (typeof currentUserId !== 'undefined') ? currentUserId : '';
+
+      // URL ADS – override per provider (sesuai permintaan)
+      var adsDefaultWorkink     = 'https://work.ink/23P2/exhubfreekey';
+      var adsDefaultLinkvertise = 'https://linkvertise.com/access/2995260/uaE3u7P8CG5D';
+
+      var adsUrlFromServer = (typeof adsUrl !== 'undefined' && adsUrl) ? adsUrl : null;
+      var adsUrlSafe = adsUrlFromServer ||
+        (providerId === 'linkvertise' ? adsDefaultLinkvertise : adsDefaultWorkink);
+
+      var keyActionUrl   = (typeof keyAction !== 'undefined' && keyAction) ? keyAction : '/getfreekey/generate';
+      var renewActionUrl = (typeof renewAction !== 'undefined' && renewAction) ? renewAction : '/getfreekey/extend';
+
+      var errMsg = (typeof errorMessage !== 'undefined' && errorMessage) ? errorMessage : '';
     %>
 
     <!-- HERO SECTION -->
@@ -108,9 +135,9 @@
 
           <div class="getkey-provider-actions">
             <a
-              href="<%= adsUrl %>"
+              href="<%= adsUrlSafe %>"
               class="btn-getkey-main"
-              <% if (!allowGenerate) { %>data-disabled="true"<% } %>>
+            >
               START
             </a>
           </div>
@@ -128,22 +155,22 @@
           </p>
         </div>
         <div class="getkey-keys-cta">
-          <form method="post" action="<%= keyAction %>">
-            <% if (typeof currentUserId !== 'undefined' && currentUserId) { %>
-              <input type="hidden" name="userId" value="<%= currentUserId %>" />
+          <form method="post" action="<%= keyActionUrl %>?ads=<%= providerId %>">
+            <% if (currentId) { %>
+              <input type="hidden" name="userId" value="<%= currentId %>" />
             <% } %>
             <button
               type="submit"
-              class="btn-subtle"
-              <% if (!allowGenerate) { %>disabled<% } %>>
-              Generate New Key
+              class="btn btn-subtle"
+              <% if (!canGenerate) { %>disabled<% } %>>
+              Generate Free Key
             </button>
           </form>
         </div>
       </header>
 
-      <% if (errorMessage) { %>
-        <div class="auth-error getkey-error"><%= errorMessage %></div>
+      <% if (errMsg) { %>
+        <div class="auth-error getkey-error"><%= errMsg %></div>
       <% } %>
 
       <div class="getkey-keys-table">
@@ -154,8 +181,8 @@
           <div>Actions</div>
         </div>
 
-        <% if (keys && keys.length > 0) { %>
-          <% keys.forEach(function(k) { %>
+        <% if (keysList.length > 0) { %>
+          <% keysList.forEach(function(k) { %>
             <div class="getkey-row">
               <div class="getkey-key">
                 <code><%= k.token %></code>
@@ -164,7 +191,7 @@
                 <%= k.timeLeftLabel || '-' %>
               </div>
               <div class="getkey-status">
-                <span class="badge <%= (k.status === 'Active' ? 'badge-active' : '') %>">
+                <span class="badge <%= (k.status === 'Active' ? 'badge-active' : 'badge-inactive') %>">
                   <%= k.status || 'Active' %>
                 </span>
               </div>
@@ -176,9 +203,11 @@
                   📋
                 </button>
 
-                <form method="post" action="<%= renewAction %>" class="inline-form">
-                  <% if (typeof currentUserId !== 'undefined' && currentUserId) { %>
-                    <input type="hidden" name="userId" value="<%= currentUserId %>" />
+                <form method="post"
+                      action="<%= renewActionUrl %>?ads=<%= providerId %>"
+                      class="inline-form">
+                  <% if (currentId) { %>
+                    <input type="hidden" name="userId" value="<%= currentId %>" />
                   <% } %>
                   <input type="hidden" name="token" value="<%= k.token %>" />
                   <button
@@ -194,7 +223,7 @@
         <% } else { %>
           <div class="getkey-keys-empty">
             No keys yet. Finish the verification above and click
-            <strong>Generate New Key</strong> to receive your first key.
+            <strong>Generate Free Key</strong> to receive your first key.
           </div>
         <% } %>
       </div>
@@ -228,5 +257,27 @@
   </div>
 </main>
 
+<script>
+(function() {
+  try {
+    // Sembunyikan parameter ?done=1 dan pastikan hanya ?ads=workink / ?ads=linkvertise yang terlihat
+    var params = new URLSearchParams(window.location.search);
+    var done = params.get('done');
+    if (done === '1') {
+      params.delete('done');
+      if (!params.get('ads')) {
+        params.set('ads', '<%= providerId %>');
+      }
+      var newUrl = window.location.pathname + '?' + params.toString();
+      // Ganti URL di address bar tanpa reload (privasi)
+      window.history.replaceState({}, '', newUrl);
+    }
+  } catch (e) {
+    // ignore
+  }
+})();
+</script>
+<!-- Proteksi dasar: blokir klik kanan + beberapa shortcut DevTools -->
+<script src="/js/protect-devtools.js"></script>
 </body>
 </html>
