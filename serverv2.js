@@ -3,16 +3,37 @@
 // DIPANGGIL dari server.js utama dengan: require("./serverv2")(app);
 
 const crypto = require("crypto");
-const path = require("path");
 
-// Helper: bangun base API ExHub (sama pola dengan index.js bot)
+// =========================
+// Helper: bangun base API ExHub
+// =========================
+//
+// Konvensi ENV yang dipakai:
+// - EXHUB_API_BASE   → biasanya kamu isi "https://exc-webs.vercel.app"
+//                       (BASE SITE, tanpa /api) di Vercel sekarang.
+// - EXHUB_SITE_BASE  → opsional, kalau mau pisah jelas base site.
+//
+// Fungsi ini akan memastikan hasil akhirnya SELALU:
+//   https://exc-webs.vercel.app/api/
+// sehingga ketika dipakai:
+//   new URL("bot/user-info", EXHUB_API_BASE)
+// akan menjadi:
+//   https://exc-webs.vercel.app/api/bot/user-info
+//
 function resolveExHubApiBase() {
-  const SITE_BASE =
-    process.env.EXHUB_SITE_BASE || "https://exc-webs.vercel.app";
   let base = process.env.EXHUB_API_BASE;
+
   if (!base) {
-    base = new URL("/api/", SITE_BASE).toString();
+    const site = process.env.EXHUB_SITE_BASE || "https://exc-webs.vercel.app";
+    base = new URL("/api/", site).toString(); // site -> site/api/
+  } else {
+    // Kalau EXHUB_API_BASE tidak mengandung "/api", tambahkan otomatis
+    // contoh: "https://exc-webs.vercel.app" -> "https://exc-webs.vercel.app/api/"
+    if (!/\/api\/?$/i.test(base)) {
+      base = new URL("/api/", base).toString();
+    }
   }
+
   if (!base.endsWith("/")) base += "/";
   return base;
 }
@@ -21,9 +42,19 @@ module.exports = function mountDiscordOAuth(app) {
   // =========================
   // ENV
   // =========================
-  const DISCORD_CLIENT_ID =
-    process.env.DISCORD_CLIENT_ID || process.env.CLIENT_ID;
-  const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
+  //
+  // PENTING:
+  // - DISCORD_CLIENT_ID       → Client ID APLIKASI OAUTH WEBSITE
+  // - DISCORD_CLIENT_SECRET   → Client Secret OAUTH
+  // - DISCORD_REDIRECT_URI    → HARUS sama dengan redirect di Discord Dev Portal,
+  //                             contoh: "https://exc-webs.vercel.app/auth/discord/callback"
+  //
+  // Bot Discord (index.js) tetap pakai:
+  // - DISCORD_TOKEN
+  // - CLIENT_ID (untuk bot)
+  //
+  const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || "";
+  const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || "";
   const DISCORD_REDIRECT_URI =
     process.env.DISCORD_REDIRECT_URI ||
     "http://localhost:3000/auth/discord/callback";
@@ -35,7 +66,13 @@ module.exports = function mountDiscordOAuth(app) {
       "[serverv2] DISCORD_CLIENT_ID atau DISCORD_CLIENT_SECRET belum diset. " +
         "Fitur Discord Login tidak akan bekerja dengan benar."
     );
+  } else {
+    console.log(
+      `[serverv2] OAuth config OK. CLIENT_ID=${DISCORD_CLIENT_ID}, REDIRECT_URI=${DISCORD_REDIRECT_URI}`
+    );
   }
+
+  console.log("[serverv2] EXHUB_API_BASE (for /api/*):", EXHUB_API_BASE);
 
   // =========================
   // MIDDLEWARE: res.locals.user
@@ -88,6 +125,7 @@ module.exports = function mountDiscordOAuth(app) {
       const url = new URL("bot/user-info", EXHUB_API_BASE);
       const payload = {
         discordId: discordUser.id,
+        // Tag boleh apa saja, di server.js kita cuma pakai discordId sebagai kunci utama
         discordTag: discordUser.username,
       };
 
@@ -125,7 +163,7 @@ module.exports = function mountDiscordOAuth(app) {
       );
       result.active = activeKeys.length;
 
-      // premium = tier === "premium"
+      // premium = tier mengandung premium/VIP
       const premiumKeys = keys.filter((k) => {
         const tier = String(k.tier || k.type || "").toLowerCase();
         return tier.includes("premium") || tier.includes("vip");
@@ -199,6 +237,14 @@ module.exports = function mountDiscordOAuth(app) {
 
   // Step 1: redirect ke Discord OAuth authorize
   app.get("/auth/discord", (req, res) => {
+    // Kalau config belum benar, jangan terusin supaya tidak bingung
+    if (!DISCORD_CLIENT_ID || !DISCORD_CLIENT_SECRET || !DISCORD_REDIRECT_URI) {
+      console.error(
+        "[serverv2] /auth/discord dipanggil tapi ENV OAuth belum lengkap."
+      );
+      return res.redirect("/discord-login?error=config");
+    }
+
     const state = crypto.randomBytes(16).toString("hex");
     if (req.session) {
       req.session.oauthState = state;
