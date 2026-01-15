@@ -7,7 +7,7 @@
   <link rel="icon" type="image/png" href="/img/ExLogo2.png" />
   <link rel="stylesheet" href="/css/mainv2.css" />
 </head>
-<body class="page-dark">
+<body class="page-dark" data-can-renew-global="<%= (typeof canRenew !== 'undefined' && canRenew) ? '1' : '0' %>">
 
 <header class="site-header">
   <div class="container header-inner">
@@ -50,6 +50,7 @@
       // =========================
       //  VARIABEL DEFENSIF
       // =========================
+
       var providerId = (typeof adsProvider !== 'undefined' && adsProvider)
         ? String(adsProvider).toLowerCase()
         : 'workink';
@@ -66,19 +67,22 @@
       var validityHours =
         (typeof defaultKeyHours !== 'undefined' && defaultKeyHours) ? defaultKeyHours : 8;
 
-      // Status checkpoint iklan dari server
-      var adsDone = (typeof adsProgressDone !== 'undefined') ? !!adsProgressDone : false;
-      var adsUsed = (typeof adsUsedFlag !== 'undefined') ? !!adsUsedFlag : false;
+      // Status checkpoint dari server
+      var adsDoneFromServer = (typeof adsProgressDone !== 'undefined') ? !!adsProgressDone : false;
+      var adsUsedFromServer = (typeof adsUsedFlag !== 'undefined') ? !!adsUsedFlag : false;
 
-      // allowGenerate / canRenew dari server (sudah mempertimbangkan checkpoint + slot)
-      var canGenerate =
-        (typeof allowGenerate !== 'undefined') ? !!allowGenerate : (usedSlots < totalSlots);
-      var canRenewFlag =
-        (typeof canRenew !== 'undefined') ? !!canRenew : (usedSlots > 0);
+      // Untuk tampilan progress:
+      // - 1/1 hanya kalau sudah done dan BELUM digunakan
+      // - setelah Generate/Renew berhasil, server set used=true → UI balik 0/1
+      var adsProgressUiDone = adsDoneFromServer && !adsUsedFromServer;
+
+      // Batasi tombol berdasarkan server (jangan ada fallback di client)
+      var canGenerateBtn = (typeof allowGenerate !== 'undefined') ? !!allowGenerate : false;
+      var canRenewGlobal = (typeof canRenew !== 'undefined') ? !!canRenew : false;
 
       var currentId   = (typeof currentUserId !== 'undefined') ? currentUserId : '';
 
-      // URL ADS – fallback hardcode jika adsUrl tidak dikirim
+      // URL ADS – fallback hardcode jika adsUrl tidak dikirim dari server
       var adsDefaultWorkink     = 'https://work.ink/23P2/exhubfreekey';
       var adsDefaultLinkvertise = 'https://linkvertise.com/access/2995260/uaE3u7P8CG5D';
       var adsUrlFromServer      = (typeof adsUrl !== 'undefined' && adsUrl) ? adsUrl : null;
@@ -103,9 +107,9 @@
         </p>
 
         <ul class="getkey-bullets">
-          <li>HWID locked for better security.</li>
+          <li>Secure & HWID-aware key system.</li>
           <li>Instant delivery right after verification.</li>
-          <li><%= validityHours %>h validity, extend anytime before expiry.</li>
+          <li><%= validityHours %>h validity, easy renew when expired.</li>
         </ul>
       </div>
 
@@ -130,9 +134,9 @@
           <div class="getkey-provider-progress">
             <div class="provider-progress-label">
               <span>Progress</span>
-              <span><%= adsDone ? '1 / 1' : '0 / 1' %></span>
+              <span><%= adsProgressUiDone ? '1 / 1' : '0 / 1' %></span>
             </div>
-            <div class="provider-progress-bar<%= adsDone ? ' provider-progress-bar--done' : '' %>">
+            <div class="provider-progress-bar<%= adsProgressUiDone ? ' provider-progress-bar--done' : '' %>">
               <span class="provider-progress-fill"></span>
             </div>
           </div>
@@ -145,11 +149,11 @@
               START
             </a>
 
-            <% if (!adsDone) { %>
+            <% if (!adsDoneFromServer) { %>
               <p class="getkey-helper-text">
                 Complete the verification first to unlock <strong>Generate</strong> or <strong>Renew</strong>.
               </p>
-            <% } else if (adsUsed) { %>
+            <% } else if (adsUsedFromServer) { %>
               <p class="getkey-helper-text">
                 This verification has been used. Run <strong>START</strong> again for a new action.
               </p>
@@ -172,19 +176,6 @@
             Your keys (<%= usedSlots %> / <%= totalSlots %>)
           </p>
         </div>
-        <div class="getkey-keys-cta">
-          <form method="post" action="<%= keyActionUrl %>?ads=<%= providerId %>">
-            <% if (currentId) { %>
-              <input type="hidden" name="userId" value="<%= currentId %>" />
-            <% } %>
-            <button
-              type="submit"
-              class="btn btn-subtle btn-generate"
-              <% if (!canGenerate) { %>disabled<% } %>>
-              Generate Free Key
-            </button>
-          </form>
-        </div>
       </header>
 
       <% if (errMsg) { %>
@@ -201,10 +192,29 @@
 
         <% if (keysList.length > 0) { %>
           <% keysList.forEach(function(k) { 
-               var isActive = (k.status === 'Active');
-               var renewDisabled = !canRenewFlag || !isActive;
+               var isActive  = (k.status === 'Active');
+               var isExpired = (k.status === 'Expired');
+               // Renew hanya relevan kalau Expired
+               var showRenewInitially = isExpired;
+               // Renew enable hanya kalau server bilang boleh (ads done & belum used)
+               var renewDisabledAtRender = !canRenewGlobal || !showRenewInitially;
+
+               // Ambil timestamp expiry (ms) untuk countdown realtime
+               var expMsStr = '';
+               if (typeof k.expiresAfter !== 'undefined' && k.expiresAfter != null) {
+                 expMsStr = String(k.expiresAfter);
+               } else if (typeof k.expiresAtMs !== 'undefined' && k.expiresAtMs != null) {
+                 expMsStr = String(k.expiresAtMs);
+               } else if (typeof k.expiresAt !== 'undefined' && k.expiresAt != null) {
+                 expMsStr = String(k.expiresAt);
+               }
           %>
-            <div class="getkey-row">
+            <div
+              class="getkey-row"
+              data-token="<%= k.token %>"
+              data-status="<%= k.status || 'Active' %>"
+              data-expires-ms="<%= expMsStr %>"
+            >
               <div class="getkey-key">
                 <code><%= k.token %></code>
               </div>
@@ -218,6 +228,7 @@
                 </span>
               </div>
               <div class="getkey-actions">
+                <!-- Copy selalu tersedia -->
                 <button
                   type="button"
                   class="btn-icon-mini"
@@ -225,9 +236,13 @@
                   📋
                 </button>
 
+                <!-- Renew selalu ada di DOM, tapi:
+                     - disembunyikan kalau belum Expired
+                     - di-enable realtime lewat JS saat Time Left jadi 0 -->
                 <form method="post"
                       action="<%= renewActionUrl %>?ads=<%= providerId %>"
-                      class="inline-form">
+                      class="inline-form renew-form"
+                      style="<%= showRenewInitially ? '' : 'display:none;' %>">
                   <% if (currentId) { %>
                     <input type="hidden" name="userId" value="<%= currentId %>" />
                   <% } %>
@@ -235,7 +250,7 @@
                   <button
                     type="submit"
                     class="btn-renew"
-                    <% if (renewDisabled) { %>disabled<% } %>>
+                    <% if (renewDisabledAtRender) { %>disabled<% } %>>
                     Renew
                   </button>
                 </form>
@@ -244,35 +259,31 @@
           <% }) %>
         <% } else { %>
           <div class="getkey-keys-empty">
-            No keys yet. Finish the verification above and click
-            <strong>Generate Free Key</strong> to receive your first key.
+            No keys yet. Finish the verification above and use
+            <strong>Generate Free Key</strong> below to receive your first key.
           </div>
         <% } %>
       </div>
     </section>
 
-    <!-- FEATURE STRIP -->
-    <section class="getkey-feature-strip">
-      <div class="getkey-feature">
-        <span class="feature-icon">🛡️</span>
-        <div>
-          <h3>HWID Locked</h3>
-          <p>Keys are bound to your hardware for additional protection.</p>
-        </div>
-      </div>
-      <div class="getkey-feature">
-        <span class="feature-icon">⚡</span>
-        <div>
-          <h3>Instant Delivery</h3>
-          <p>Your key appears on this page as soon as you complete verification.</p>
-        </div>
-      </div>
-      <div class="getkey-feature">
-        <span class="feature-icon">⏰</span>
-        <div>
-          <h3><%= validityHours %>h Validity</h3>
-          <p>Extend your key anytime before expiry with a single click.</p>
-        </div>
+    <!-- CTA BAWAH – GENERATE FREE KEY DI TENGAH -->
+    <section class="getkey-cta-main" style="margin-top:24px;">
+      <div style="text-align:center;">
+        <form method="post" action="<%= keyActionUrl %>?ads=<%= providerId %>">
+          <% if (currentId) { %>
+            <input type="hidden" name="userId" value="<%= currentId %>" />
+          <% } %>
+          <button
+            type="submit"
+            class="btn btn-primary btn-cta-main"
+            style="min-width:220px;padding:10px 22px;font-size:0.95rem;"
+            <% if (!canGenerateBtn) { %>disabled<% } %>>
+            Generate Free Key
+          </button>
+        </form>
+        <p class="getkey-cta-caption" style="margin-top:8px;font-size:0.8rem;color:#9ca3c0;">
+          One action per verification — choose <strong>Generate</strong> or <strong>Renew</strong> after completing ads.
+        </p>
       </div>
     </section>
 
@@ -282,8 +293,7 @@
 <script>
 (function() {
   try {
-    // Lapisan ekstra: jika suatu saat masih ada ?done=1 dari provider,
-    // sembunyikan dari address bar dan pastikan tetap punya ?ads=...
+    // Sembunyikan ?done=1 di URL, tetap pertahankan ?ads=workink / ?ads=linkvertise
     var params = new URLSearchParams(window.location.search);
     var done = params.get('done');
     if (done === '1') {
@@ -297,6 +307,70 @@
   } catch (e) {
     // ignore
   }
+})();
+
+(function() {
+  // Countdown realtime + auto switch ke Expired + show/enable Renew
+  function pad(n) {
+    return n < 10 ? '0' + n : '' + n;
+  }
+
+  function formatMs(ms) {
+    if (ms <= 0) return 'Expired';
+    var sec = Math.floor(ms / 1000);
+    var h = Math.floor(sec / 3600);
+    var m = Math.floor((sec % 3600) / 60);
+    var s = sec % 60;
+    return pad(h) + ':' + pad(m) + ':' + pad(s);
+  }
+
+  var canRenewGlobal = document.body.getAttribute('data-can-renew-global') === '1';
+
+  function tick() {
+    var now = Date.now();
+    var rows = document.querySelectorAll('.getkey-row[data-expires-ms]');
+    rows.forEach(function(row) {
+      var expStr = row.getAttribute('data-expires-ms');
+      if (!expStr) return;
+      var expMs = parseInt(expStr, 10);
+      if (!expMs || isNaN(expMs)) return;
+
+      var msLeft = expMs - now;
+      var timeCell   = row.querySelector('.getkey-time');
+      var badge      = row.querySelector('.getkey-status .badge');
+      var renewForm  = row.querySelector('.renew-form');
+      var renewBtn   = row.querySelector('.btn-renew');
+
+      if (!timeCell) return;
+
+      if (msLeft > 0) {
+        timeCell.textContent = formatMs(msLeft);
+      } else {
+        // Sudah expired
+        timeCell.textContent = 'Expired';
+
+        // Update badge ke Expired (warna inactive)
+        if (badge) {
+          badge.classList.remove('badge-active');
+          badge.classList.add('badge-inactive');
+          badge.innerHTML = '<span class="badge-dot"></span>Expired';
+        }
+
+        // Tampilkan form Renew jika ada
+        if (renewForm) {
+          renewForm.style.display = '';
+        }
+
+        // Enable tombol Renew hanya jika server mengizinkan (checkpoint ads)
+        if (renewBtn && canRenewGlobal) {
+          renewBtn.disabled = false;
+        }
+      }
+    });
+  }
+
+  tick();
+  setInterval(tick, 1000);
 })();
 </script>
 
