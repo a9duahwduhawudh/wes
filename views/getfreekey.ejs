@@ -53,7 +53,6 @@
       var providerId = (typeof adsProvider !== 'undefined' && adsProvider)
         ? String(adsProvider).toLowerCase()
         : 'workink';
-
       if (providerId !== 'linkvertise') providerId = 'workink';
 
       var providerName = (providerId === 'linkvertise') ? 'Linkvertise' : 'Work.ink';
@@ -61,23 +60,28 @@
         ? '/img/linkvertise.png'
         : '/img/workink.jpg';
 
-      var totalSlots = (typeof maxKeys !== 'undefined' && maxKeys) ? maxKeys : 5;
-      var keysList   = (typeof keys !== 'undefined' && keys && keys.length) ? keys : [];
+      var totalSlots = (typeof maxKeys !== 'undefined' && maxKeys != null) ? maxKeys : 5;
+      var keysList   = Array.isArray(keys) ? keys : [];
       var usedSlots  = keysList.length;
-      var validityHours = (typeof defaultKeyHours !== 'undefined' && defaultKeyHours) ? defaultKeyHours : 8;
+      var validityHours =
+        (typeof defaultKeyHours !== 'undefined' && defaultKeyHours) ? defaultKeyHours : 8;
 
-      // allowGenerate biasanya sudah di-set server (sinkron dengan REQUIREFREEKEY_ADS_CHECKPOINT)
-      var canGenerate = (typeof allowGenerate !== 'undefined')
-        ? !!allowGenerate
-        : (usedSlots < totalSlots);
+      // Status checkpoint iklan dari server
+      var adsDone = (typeof adsProgressDone !== 'undefined') ? !!adsProgressDone : false;
+      var adsUsed = (typeof adsUsedFlag !== 'undefined') ? !!adsUsedFlag : false;
+
+      // allowGenerate / canRenew dari server (sudah mempertimbangkan checkpoint + slot)
+      var canGenerate =
+        (typeof allowGenerate !== 'undefined') ? !!allowGenerate : (usedSlots < totalSlots);
+      var canRenewFlag =
+        (typeof canRenew !== 'undefined') ? !!canRenew : (usedSlots > 0);
 
       var currentId   = (typeof currentUserId !== 'undefined') ? currentUserId : '';
 
-      // URL ADS – override per provider (sesuai permintaan)
+      // URL ADS – fallback hardcode jika adsUrl tidak dikirim
       var adsDefaultWorkink     = 'https://work.ink/23P2/exhubfreekey';
       var adsDefaultLinkvertise = 'https://linkvertise.com/access/2995260/uaE3u7P8CG5D';
-
-      var adsUrlFromServer = (typeof adsUrl !== 'undefined' && adsUrl) ? adsUrl : null;
+      var adsUrlFromServer      = (typeof adsUrl !== 'undefined' && adsUrl) ? adsUrl : null;
       var adsUrlSafe = adsUrlFromServer ||
         (providerId === 'linkvertise' ? adsDefaultLinkvertise : adsDefaultWorkink);
 
@@ -126,9 +130,9 @@
           <div class="getkey-provider-progress">
             <div class="provider-progress-label">
               <span>Progress</span>
-              <span>0 / 1</span>
+              <span><%= adsDone ? '1 / 1' : '0 / 1' %></span>
             </div>
-            <div class="provider-progress-bar">
+            <div class="provider-progress-bar<%= adsDone ? ' provider-progress-bar--done' : '' %>">
               <span class="provider-progress-fill"></span>
             </div>
           </div>
@@ -140,6 +144,20 @@
             >
               START
             </a>
+
+            <% if (!adsDone) { %>
+              <p class="getkey-helper-text">
+                Complete the verification first to unlock <strong>Generate</strong> or <strong>Renew</strong>.
+              </p>
+            <% } else if (adsUsed) { %>
+              <p class="getkey-helper-text">
+                This verification has been used. Run <strong>START</strong> again for a new action.
+              </p>
+            <% } else { %>
+              <p class="getkey-helper-text">
+                Checkpoint unlocked — you can <strong>Generate</strong> or <strong>Renew</strong> one key.
+              </p>
+            <% } %>
           </div>
         </div>
       </div>
@@ -161,7 +179,7 @@
             <% } %>
             <button
               type="submit"
-              class="btn btn-subtle"
+              class="btn btn-subtle btn-generate"
               <% if (!canGenerate) { %>disabled<% } %>>
               Generate Free Key
             </button>
@@ -182,7 +200,10 @@
         </div>
 
         <% if (keysList.length > 0) { %>
-          <% keysList.forEach(function(k) { %>
+          <% keysList.forEach(function(k) { 
+               var isActive = (k.status === 'Active');
+               var renewDisabled = !canRenewFlag || !isActive;
+          %>
             <div class="getkey-row">
               <div class="getkey-key">
                 <code><%= k.token %></code>
@@ -191,7 +212,8 @@
                 <%= k.timeLeftLabel || '-' %>
               </div>
               <div class="getkey-status">
-                <span class="badge <%= (k.status === 'Active' ? 'badge-active' : 'badge-inactive') %>">
+                <span class="badge <%= isActive ? 'badge-active' : 'badge-inactive' %>">
+                  <span class="badge-dot"></span>
                   <%= k.status || 'Active' %>
                 </span>
               </div>
@@ -212,9 +234,9 @@
                   <input type="hidden" name="token" value="<%= k.token %>" />
                   <button
                     type="submit"
-                    class="btn-link-ghost"
-                    <% if (k.status === 'Expired') { %>disabled<% } %>>
-                    Extend
+                    class="btn-renew"
+                    <% if (renewDisabled) { %>disabled<% } %>>
+                    Renew
                   </button>
                 </form>
               </div>
@@ -260,7 +282,8 @@
 <script>
 (function() {
   try {
-    // Sembunyikan parameter ?done=1 dan pastikan hanya ?ads=workink / ?ads=linkvertise yang terlihat
+    // Lapisan ekstra: jika suatu saat masih ada ?done=1 dari provider,
+    // sembunyikan dari address bar dan pastikan tetap punya ?ads=...
     var params = new URLSearchParams(window.location.search);
     var done = params.get('done');
     if (done === '1') {
@@ -269,7 +292,6 @@
         params.set('ads', '<%= providerId %>');
       }
       var newUrl = window.location.pathname + '?' + params.toString();
-      // Ganti URL di address bar tanpa reload (privasi)
       window.history.replaceState({}, '', newUrl);
     }
   } catch (e) {
@@ -277,6 +299,7 @@
   }
 })();
 </script>
+
 <!-- Proteksi dasar: blokir klik kanan + beberapa shortcut DevTools -->
 <script src="/js/protect-devtools.js"></script>
 </body>
