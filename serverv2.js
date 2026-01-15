@@ -4,6 +4,26 @@
 
 const crypto = require("crypto");
 
+// ========================================================
+//  KONFIGURASI GLOBAL FREE KEY
+// ========================================================
+
+// TTL default free key (jam)
+const FREE_KEY_TTL_HOURS = (() => {
+  const v = parseInt(process.env.FREEKEY_TTL_HOURS || "3", 10);
+  return Number.isFinite(v) && v > 0 ? v : 3;
+})();
+
+// Maksimal key per user (untuk halaman Get Free Key)
+const FREE_KEY_MAX_PER_USER = (() => {
+  const v = parseInt(process.env.FREEKEY_MAX_PER_USER || "5", 10);
+  return Number.isFinite(v) && v > 0 ? v : 5;
+})();
+
+// Jika = "1" → user HARUS lewat checkpoint iklan (?done=1) sebelum bisa Generate Free Key
+const REQUIRE_FREEKEY_ADS_CHECKPOINT =
+  String(process.env.REQUIREFREEKEY_ADS_CHECKPOINT || "0") === "1";
+
 // Helper: bangun base API ExHub (sama pola dengan index.js bot)
 function resolveExHubApiBase() {
   const SITE_BASE =
@@ -15,6 +35,154 @@ function resolveExHubApiBase() {
   if (!base.endsWith("/")) base += "/";
   return base;
 }
+
+// ========================================================
+//  PENYIMPANAN FREE KEY (IN MEMORY)
+//  - Untuk produksi, ganti bagian ini ke Upstash / DB yang kamu pakai.
+// ========================================================
+
+// token -> record
+const freeKeyStore = new Map();
+// userId (Discord) -> Set(token)
+const userFreeKeys = new Map();
+
+/**
+ * Generate token random dengan pola:
+ * EXHUBFREE-XXX-XXXX-XXXXX
+ * (huruf besar, kecil, angka)
+ */
+function generateFreeKeyToken() {
+  const chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+  function randSegment(len) {
+    let out = "";
+    for (let i = 0; i < len; i++) {
+      out += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return out;
+  }
+
+  return `EXHUBFREE-${randSegment(3)}-${randSegment(4)}-${randSegment(5)}`;
+}
+
+/**
+ * Format sisa waktu (ms) menjadi HH:MM:SS atau "Expired".
+ */
+function formatTimeLeft(ms) {
+  if (ms == null) return "-";
+  if (ms <= 0) return "Expired";
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(h)}:${pad(m)}:${pad(s)}`;
+}
+
+/**
+ * Buat record free key baru untuk user tertentu.
+ */
+function createFreeKeyRecord({ token, userId, byIp, provider }) {
+  const createdAt = Date.now();
+  const ttlMs = FREE_KEY_TTL_HOURS * 60 * 60 * 1000;
+  const expiresAfter = createdAt + ttlMs;
+
+  const record = {
+    token,
+    createdAt,
+    byIp: byIp || null,
+    linkId: provider || null, // bisa diisi "workink" / "linkvertise"
+    userId,
+    expiresAfter,
+    deleted: false,
+  };
+
+  freeKeyStore.set(token, record);
+
+  if (!userFreeKeys.has(userId)) {
+    userFreeKeys.set(userId, new Set());
+  }
+  userFreeKeys.get(userId).add(token);
+
+  return record;
+}
+
+/**
+ * Ambil list key milik user (untuk tabel di getfreekey.ejs).
+ */
+function getFreeKeysForUser(userId) {
+  const set = userFreeKeys.get(userId);
+  if (!set) return [];
+
+  const now = Date.now();
+  const result = [];
+
+  for (const token of set) {
+    const rec = freeKeyStore.get(token);
+    if (!rec) continue;
+
+    const msLeft = rec.expiresAfter - now;
+    const valid = !rec.deleted && msLeft > 0;
+
+    result.push({
+      token: rec.token,
+      timeLeftLabel: formatTimeLeft(msLeft),
+      status: rec.deleted ? "Deleted" : valid ? "Active" : "Expired",
+      raw: rec,
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Update expire key (extend).
+ */
+function extendFreeKey(token) {
+  const rec = freeKeyStore.get(token);
+  if (!rec || rec.deleted) return null;
+
+  const ttlMs = FREE_KEY_TTL_HOURS * 60 * 60 * 1000;
+  const now = Date.now();
+  rec.expiresAfter = now + ttlMs;
+  return rec;
+}
+
+/**
+ * Validasi key untuk endpoint /api/freekey/isValidate/:token
+ */
+function validateFreeKeyToken(token) {
+  const rec = freeKeyStore.get(token);
+  if (!rec) {
+    return {
+      valid: false,
+      deleted: false,
+      info: null,
+    };
+  }
+
+  const now = Date.now();
+  const deleted = !!rec.deleted;
+  const valid = !deleted && now < rec.expiresAfter;
+
+  return {
+    valid,
+    deleted,
+    info: {
+      token: rec.token,
+      createdAt: rec.createdAt,
+      byIp: rec.byIp,
+      linkId: rec.linkId,
+      userId: rec.userId,
+      expiresAfter: rec.expiresAfter,
+    },
+  };
+}
+
+// ========================================================
+//  MODUL UTAMA
+// ========================================================
 
 module.exports = function mountDiscordOAuth(app) {
   // =========================
@@ -29,13 +197,13 @@ module.exports = function mountDiscordOAuth(app) {
 
   const EXHUB_API_BASE = resolveExHubApiBase();
 
-  // Optional: URL iklan Work.ink & Linkvertise
+  // URL iklan Work.ink & Linkvertise
   const WORKINK_ADS_URL =
     process.env.WORKINK_ADS_URL ||
-    "https://link-hub.net/2995260/0xLAgWUZzCns";
+    "https://work.ink/23P2/exhubfreekey";
   const LINKVERTISE_ADS_URL =
     process.env.LINKVERTISE_ADS_URL ||
-    "https://linkvertise.com/";
+    "https://linkvertise.com/access/2995260/uaE3u7P8CG5D";
 
   if (!DISCORD_CLIENT_ID || !DISCORD_CLIENT_SECRET) {
     console.warn(
@@ -77,6 +245,20 @@ module.exports = function mountDiscordOAuth(app) {
       return res.redirect("/login-required");
     }
     next();
+  }
+
+  function canonicalAdsProvider(raw) {
+    const v = String(raw || "").toLowerCase();
+    if (v === "linkvertise" || v === "linkvertise.com") return "linkvertise";
+    return "workink";
+  }
+
+  function getClientIp(req) {
+    const xf = req.headers["x-forwarded-for"];
+    if (typeof xf === "string" && xf.length > 0) {
+      return xf.split(",")[0].trim();
+    }
+    return req.ip || null;
   }
 
   // Ambil data key user dari ExHub API (contoh: /api/bot/user-info)
@@ -167,9 +349,9 @@ module.exports = function mountDiscordOAuth(app) {
     }
   }
 
-  // =========================
+  // ======================================================
   // ROUTES – PUBLIC PAGES
-  // =========================
+  // ======================================================
 
   // popup Sign In (mirip gambar "Sign in with Discord")
   app.get("/discord-login", (req, res) => {
@@ -183,9 +365,9 @@ module.exports = function mountDiscordOAuth(app) {
     res.render("login-required");
   });
 
-  // =========================
+  // ======================================================
   // ROUTES – DASHBOARD & PAGE WAJIB LOGIN
-  // =========================
+  // ======================================================
 
   app.get("/dashboard", requireAuth, async (req, res) => {
     const discordUser = req.session.discordUser;
@@ -202,27 +384,49 @@ module.exports = function mountDiscordOAuth(app) {
   // Halaman baru: Get Free Key (Work.ink / Linkvertise)
   app.get("/getfreekey", requireAuth, async (req, res) => {
     const discordUser = req.session.discordUser;
-    const rawAds = (req.query.ads || "workink").toLowerCase();
+    const userId = discordUser.id;
 
-    const adsProvider =
-      rawAds === "linkvertise" || rawAds === "linkvertise.com"
-        ? "linkvertise"
-        : "workink";
+    const doneFlag = String(req.query.done || "") === "1";
+    const queryAds = req.query.ads;
+
+    // Tentukan provider
+    let adsProvider = canonicalAdsProvider(queryAds);
+
+    // Kalau tidak ada ?ads di query, pakai last provider dari session (kalau ada)
+    if (!queryAds && req.session && req.session.lastFreeKeyAdsProvider) {
+      adsProvider = req.session.lastFreeKeyAdsProvider;
+    }
+
+    if (req.session) {
+      req.session.lastFreeKeyAdsProvider = adsProvider;
+
+      // Kalau datang dengan ?done=1 → tandai checkpoint
+      if (doneFlag) {
+        if (!req.session.freeKeyAdsState) {
+          req.session.freeKeyAdsState = {};
+        }
+        req.session.freeKeyAdsState[adsProvider] = Date.now();
+      }
+    }
 
     const adsUrl =
       adsProvider === "linkvertise" ? LINKVERTISE_ADS_URL : WORKINK_ADS_URL;
 
-    // Ambil key yang sama seperti di dashboard, lalu mapping ke bentuk sederhana
-    const keyData = await getUserKeys(discordUser);
-    const maxKeys = 5;
-    const keys =
-      (keyData.keys || []).map((k) => ({
-        token: k.key,
-        timeLeftLabel: k.timeLeft || "-",
-        status: k.status || "Active",
-      })) || [];
+    // Ambil free key in-memory
+    const keys = getFreeKeysForUser(userId);
+    const maxKeys = FREE_KEY_MAX_PER_USER;
 
-    const allowGenerate = keys.length < maxKeys;
+    const capacityOk = keys.length < maxKeys;
+
+    let hasCheckpoint = true;
+    if (REQUIRE_FREEKEY_ADS_CHECKPOINT) {
+      const state = (req.session && req.session.freeKeyAdsState) || {};
+      hasCheckpoint = !!state[adsProvider];
+    }
+
+    const allowGenerate =
+      capacityOk && (!REQUIRE_FREEKEY_ADS_CHECKPOINT || hasCheckpoint);
+
     const errorMessage = req.query.error || null;
 
     res.render("getfreekey", {
@@ -232,62 +436,137 @@ module.exports = function mountDiscordOAuth(app) {
       adsUrl,
       keys,
       maxKeys,
-      defaultKeyHours: 8,
+      defaultKeyHours: FREE_KEY_TTL_HOURS,
       allowGenerate,
-      currentUserId: discordUser.id,
+      currentUserId: userId,
       keyAction: "/getfreekey/generate",
       renewAction: "/getfreekey/extend",
       errorMessage,
     });
   });
 
-  // POST generate key (stub, nanti bisa disambungkan ke ExHub API internal)
+  // POST generate free key
   app.post("/getfreekey/generate", requireAuth, async (req, res) => {
-    const ads = (req.query.ads || "workink").toLowerCase();
+    const discordUser = req.session.discordUser;
+    const userId = discordUser.id;
+
+    const adsRaw = req.query.ads || req.session.lastFreeKeyAdsProvider || "workink";
+    const adsProvider = canonicalAdsProvider(adsRaw);
+
+    const keys = getFreeKeysForUser(userId);
+    const maxKeys = FREE_KEY_MAX_PER_USER;
+    const capacityOk = keys.length < maxKeys;
+
+    if (!capacityOk) {
+      return res.redirect(
+        "/getfreekey?ads=" +
+          encodeURIComponent(adsProvider) +
+          "&error=" +
+          encodeURIComponent("Key limit reached for this account.")
+      );
+    }
+
+    let hasCheckpoint = true;
+    if (REQUIRE_FREEKEY_ADS_CHECKPOINT) {
+      const state = (req.session && req.session.freeKeyAdsState) || {};
+      hasCheckpoint = !!state[adsProvider];
+      if (!hasCheckpoint) {
+        return res.redirect(
+          "/getfreekey?ads=" +
+            encodeURIComponent(adsProvider) +
+            "&error=" +
+            encodeURIComponent("Please complete the verification task first.")
+        );
+      }
+    }
 
     try {
-      // TODO: panggil API internal ExHub untuk generate key di sini,
-      // misal: await fetch(EXHUB_API_BASE + "keys/generate", {...})
+      const token = generateFreeKeyToken();
+      const ip = getClientIp(req);
 
-      // Untuk sementara hanya redirect balik tanpa error
-      return res.redirect("/getfreekey?ads=" + encodeURIComponent(ads));
+      createFreeKeyRecord({
+        token,
+        userId,
+        byIp: ip,
+        provider: adsProvider,
+      });
+
+      // Setelah berhasil generate, checkpoint boleh di-reset
+      if (REQUIRE_FREEKEY_ADS_CHECKPOINT && req.session?.freeKeyAdsState) {
+        delete req.session.freeKeyAdsState[adsProvider];
+      }
+
+      return res.redirect("/getfreekey?ads=" + encodeURIComponent(adsProvider));
     } catch (err) {
       console.error("[serverv2] generate free key error:", err);
       return res.redirect(
         "/getfreekey?ads=" +
-          encodeURIComponent(ads) +
+          encodeURIComponent(adsProvider) +
           "&error=" +
-          encodeURIComponent("Failed to generate key.")
+          encodeURIComponent("Failed to generate free key.")
       );
     }
   });
 
-  // POST extend key (stub, nanti sambungkan ke API internal kalau ada)
+  // POST extend free key
   app.post("/getfreekey/extend", requireAuth, async (req, res) => {
-    const ads = (req.query.ads || "workink").toLowerCase();
+    const discordUser = req.session.discordUser;
+    const userId = discordUser.id;
+
+    const adsRaw = req.query.ads || req.session.lastFreeKeyAdsProvider || "workink";
+    const adsProvider = canonicalAdsProvider(adsRaw);
+
     const token = req.body && req.body.token;
+    if (!token) {
+      return res.redirect(
+        "/getfreekey?ads=" +
+          encodeURIComponent(adsProvider) +
+          "&error=" +
+          encodeURIComponent("Invalid token.")
+      );
+    }
 
     try {
-      if (token) {
-        // TODO: panggil API internal ExHub untuk extend key,
-        // misal: await fetch(EXHUB_API_BASE + "keys/extend", {...})
+      const rec = freeKeyStore.get(token);
+      if (!rec || rec.userId !== userId) {
+        return res.redirect(
+          "/getfreekey?ads=" +
+            encodeURIComponent(adsProvider) +
+            "&error=" +
+            encodeURIComponent("Key not found for this user.")
+        );
       }
 
-      return res.redirect("/getfreekey?ads=" + encodeURIComponent(ads));
+      extendFreeKey(token);
+
+      return res.redirect("/getfreekey?ads=" + encodeURIComponent(adsProvider));
     } catch (err) {
       console.error("[serverv2] extend free key error:", err);
       return res.redirect(
         "/getfreekey?ads=" +
-          encodeURIComponent(ads) +
+          encodeURIComponent(adsProvider) +
           "&error=" +
           encodeURIComponent("Failed to extend key.")
       );
     }
   });
 
-  // =========================
+  // ======================================================
+  // ROUTES – API FREEKEY (untuk executor / eksternal)
+  // ======================================================
+
+  // Validate free key: /api/freekey/isValidate/{KEY}
+  app.get("/api/freekey/isValidate/:token", (req, res) => {
+    const rawToken = req.params.token || "";
+    const token = String(rawToken).trim();
+
+    const result = validateFreeKeyToken(token);
+    res.json(result);
+  });
+
+  // ======================================================
   // ROUTES – DISCORD OAUTH2
-  // =========================
+  // ======================================================
 
   // Step 1: redirect ke Discord OAuth authorize
   app.get("/auth/discord", (req, res) => {
@@ -431,5 +710,7 @@ module.exports = function mountDiscordOAuth(app) {
     res.redirect("/");
   });
 
-  console.log("[serverv2] Discord OAuth + Dashboard + GetFreeKey routes mounted.");
+  console.log(
+    "[serverv2] Discord OAuth + Dashboard + GetFreeKey + FreeKey API routes mounted."
+  );
 };
