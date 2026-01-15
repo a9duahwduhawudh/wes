@@ -3726,6 +3726,19 @@ app.get('/api/bot/ping', (req, res) => {
 });
 
 // ===================================================================
+// MOUNT DISCORD OAUTH + DASHBOARD (serverv2.js)
+// ===================================================================
+
+// Di sini kita mount semua route baru (/discord-login, /auth/discord, /dashboard, dll)
+// dari file serverv2.js tanpa membuat server Express kedua.
+try {
+  require('./serverv2')(app);
+  console.log('[server] serverv2 routes mounted.');
+} catch (err) {
+  console.error('[server] Failed to mount serverv2 routes:', err);
+}
+
+// ===================================================================
 // Public endpoint untuk Private Raw Links: /:id.raw
 // ===================================================================
 
