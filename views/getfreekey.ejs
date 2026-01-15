@@ -7,7 +7,7 @@
   <link rel="icon" type="image/png" href="/img/ExLogo2.png" />
   <link rel="stylesheet" href="/css/mainv2.css" />
 </head>
-<body class="page-dark" data-can-renew-global="<%= (typeof canRenew !== 'undefined' && canRenew) ? '1' : '0' %>">
+<body class="page-dark">
 
 <header class="site-header">
   <div class="container header-inner">
@@ -65,18 +65,18 @@
       var keysList   = Array.isArray(keys) ? keys : [];
       var usedSlots  = keysList.length;
       var validityHours =
-        (typeof defaultKeyHours !== 'undefined' && defaultKeyHours) ? defaultKeyHours : 8;
+        (typeof defaultKeyHours !== 'undefined' && defaultKeyHours) ? defaultKeyHours : 3;
 
       // Status checkpoint dari server
       var adsDoneFromServer = (typeof adsProgressDone !== 'undefined') ? !!adsProgressDone : false;
       var adsUsedFromServer = (typeof adsUsedFlag !== 'undefined') ? !!adsUsedFlag : false;
 
       // Untuk tampilan progress:
-      // - 1/1 hanya kalau sudah done dan BELUM digunakan
+      // - 1/1 kalau sudah done dan BELUM digunakan
       // - setelah Generate/Renew berhasil, server set used=true → UI balik 0/1
       var adsProgressUiDone = adsDoneFromServer && !adsUsedFromServer;
 
-      // Batasi tombol berdasarkan server (jangan ada fallback di client)
+      // Flag dari server (tidak ada fallback di client)
       var canGenerateBtn = (typeof allowGenerate !== 'undefined') ? !!allowGenerate : false;
       var canRenewGlobal = (typeof canRenew !== 'undefined') ? !!canRenew : false;
 
@@ -84,7 +84,7 @@
 
       // URL ADS – fallback hardcode jika adsUrl tidak dikirim dari server
       var adsDefaultWorkink     = 'https://work.ink/23P2/exhubfreekey';
-      var adsDefaultLinkvertise = 'https://linkvertise.com/2995260/uaE3u7P8CG5D?o=sharing';
+      var adsDefaultLinkvertise = 'https://linkvertise.com/access/2995260/uaE3u7P8CG5D';
       var adsUrlFromServer      = (typeof adsUrl !== 'undefined' && adsUrl) ? adsUrl : null;
       var adsUrlSafe = adsUrlFromServer ||
         (providerId === 'linkvertise' ? adsDefaultLinkvertise : adsDefaultWorkink);
@@ -192,68 +192,83 @@
 
         <% if (keysList.length > 0) { %>
           <% keysList.forEach(function(k) { 
-               var isActive  = (k.status === 'Active');
-               var isExpired = (k.status === 'Expired');
-               // Renew hanya relevan kalau Expired
-               var showRenewInitially = isExpired;
-               // Renew enable hanya kalau server bilang boleh (ads done & belum used)
-               var renewDisabledAtRender = !canRenewGlobal || !showRenewInitially;
+               // ===== Status & badge =====
+               var statusLabel = (k && k.status) ? k.status : 'Active';
+               var isActive    = (statusLabel === 'Active');
+               var isExpired   = (statusLabel === 'Expired');
+               var badgeClass  = isActive ? 'badge-active' : 'badge-inactive';
 
-               // Ambil timestamp expiry (ms) untuk countdown realtime
-               var expMsStr = '';
+               // ===== Expire timestamp (ms) untuk countdown realtime =====
+               var expireTs = null;
                if (typeof k.expiresAfter !== 'undefined' && k.expiresAfter != null) {
-                 expMsStr = String(k.expiresAfter);
+                 expireTs = parseInt(k.expiresAfter, 10);
                } else if (typeof k.expiresAtMs !== 'undefined' && k.expiresAtMs != null) {
-                 expMsStr = String(k.expiresAtMs);
+                 expireTs = parseInt(k.expiresAtMs, 10);
                } else if (typeof k.expiresAt !== 'undefined' && k.expiresAt != null) {
-                 expMsStr = String(k.expiresAt);
+                 var tmp = parseInt(k.expiresAt, 10);
+                 if (!isNaN(tmp)) expireTs = tmp;
                }
+
+               // ===== Mode tombol awal (Copy vs Renew) =====
+               var btnMode        = isExpired ? 'renew' : 'copy';
+               var btnLabel       = isExpired ? 'Renew' : 'Copy';
+               var btnDisabledStr = '';
+
+               // Kalau status Expired tapi server belum mengizinkan Renew (checkpoint belum unlocked)
+               if (isExpired && !canRenewGlobal) {
+                 btnDisabledStr = 'disabled="disabled" aria-disabled="true"';
+               }
+
+               var expireAttr = expireTs ? String(expireTs) : '';
           %>
             <div
               class="getkey-row"
-              data-token="<%= k.token %>"
-              data-status="<%= k.status || 'Active' %>"
-              data-expires-ms="<%= expMsStr %>"
+              data-status="<%= statusLabel %>"
+              <% if (expireAttr) { %> data-expire-ts="<%= expireAttr %>" <% } %>
             >
               <div class="getkey-key">
                 <code><%= k.token %></code>
               </div>
               <div class="getkey-time">
-                <%= k.timeLeftLabel || '-' %>
+                <span class="getkey-time-label">
+                  <%= k.timeLeftLabel || (expireAttr ? '' : '-') %>
+                </span>
               </div>
               <div class="getkey-status">
-                <span class="badge <%= isActive ? 'badge-active' : 'badge-inactive' %>">
+                <span class="badge <%= badgeClass %> getkey-status-badge">
                   <span class="badge-dot"></span>
-                  <%= k.status || 'Active' %>
+                  <%= statusLabel %>
                 </span>
               </div>
               <div class="getkey-actions">
-                <!-- Copy selalu tersedia -->
+                <!-- Tombol 2-in-1: Copy (Active) → Renew (Expired) -->
                 <button
                   type="button"
-                  class="btn-icon-mini"
-                  onclick="navigator.clipboard.writeText('<%= k.token %>')">
-                  📋
+                  class="btn btn-ghost btn-xs"
+                  data-copy-or-renew="1"
+                  data-mode="<%= btnMode %>"
+                  data-token="<%= k.token %>"
+                  <%- btnDisabledStr %>
+                >
+                  <%= btnLabel %>
                 </button>
 
-                <!-- Renew selalu ada di DOM, tapi:
-                     - disembunyikan kalau belum Expired
-                     - di-enable realtime lewat JS saat Time Left jadi 0 -->
-                <form method="post"
-                      action="<%= renewActionUrl %>?ads=<%= providerId %>"
-                      class="inline-form renew-form"
-                      style="<%= showRenewInitially ? '' : 'display:none;' %>">
-                  <% if (currentId) { %>
-                    <input type="hidden" name="userId" value="<%= currentId %>" />
-                  <% } %>
-                  <input type="hidden" name="token" value="<%= k.token %>" />
-                  <button
-                    type="submit"
-                    class="btn-renew"
-                    <% if (renewDisabledAtRender) { %>disabled<% } %>>
-                    Renew
-                  </button>
-                </form>
+                <% if (renewActionUrl) { %>
+                  <!-- Hidden form untuk Renew, akan di-submit via JS saat mode = 'renew' -->
+                  <form
+                    method="post"
+                    action="<%= renewActionUrl %>?ads=<%= providerId %>"
+                    class="inline-form"
+                    data-renew-form="1"
+                    style="display:none;"
+                  >
+                    <% if (currentId) { %>
+                      <input type="hidden" name="userId" value="<%= currentId %>" />
+                    <% } %>
+                    <input type="hidden" name="token" value="<%= k.token %>" />
+                    <button type="submit" data-renew-hidden-btn="1" style="display:none;"></button>
+                  </form>
+                <% } %>
               </div>
             </div>
           <% }) %>
@@ -266,10 +281,15 @@
       </div>
     </section>
 
-    <!-- CTA BAWAH – GENERATE FREE KEY DI TENGAH -->
+    <!-- CTA BAWAH – GENERATE FREE KEY DI TENGAH (mirip Get A New Key di generatekey) -->
     <section class="getkey-cta-main" style="margin-top:24px;">
       <div style="text-align:center;">
-        <form method="post" action="<%= keyActionUrl %>?ads=<%= providerId %>">
+        <form
+          method="post"
+          action="<%= keyActionUrl %>?ads=<%= providerId %>"
+          data-new-key-form="1"
+          style="display:inline-flex;flex-direction:column;align-items:center;gap:8px;"
+        >
           <% if (currentId) { %>
             <input type="hidden" name="userId" value="<%= currentId %>" />
           <% } %>
@@ -277,13 +297,22 @@
             type="submit"
             class="btn btn-primary btn-cta-main"
             style="min-width:220px;padding:10px 22px;font-size:0.95rem;"
-            <% if (!canGenerateBtn) { %>disabled<% } %>>
+            <% if (!canGenerateBtn) { %>disabled aria-disabled="true"<% } %>>
             Generate Free Key
           </button>
+
+          <% if (!canGenerateBtn) { %>
+            <p class="getkey-cta-caption" style="margin-top:4px;font-size:0.8rem;color:#9ca3c0;max-width:340px;">
+              Complete <strong>START</strong> verification first. After redirecting back here,
+              this button or <strong>Renew</strong> will be unlocked for one action.
+            </p>
+          <% } else { %>
+            <p class="getkey-cta-caption" style="margin-top:4px;font-size:0.8rem;color:#9ca3c0;max-width:340px;">
+              This checkpoint allows <strong>one</strong> action: choose either
+              <strong>Generate Free Key</strong> or <strong>Renew</strong>.
+            </p>
+          <% } %>
         </form>
-        <p class="getkey-cta-caption" style="margin-top:8px;font-size:0.8rem;color:#9ca3c0;">
-          One action per verification — choose <strong>Generate</strong> or <strong>Renew</strong> after completing ads.
-        </p>
       </div>
     </section>
 
@@ -293,7 +322,7 @@
 <script>
 (function() {
   try {
-    // Sembunyikan ?done=1 di URL, tetap pertahankan ?ads=workink / ?ads=linkvertise
+    // Bersihkan ?done=1 di URL, tetap pertahankan ?ads=workink / ?ads=linkvertise
     var params = new URLSearchParams(window.location.search);
     var done = params.get('done');
     if (done === '1') {
@@ -308,62 +337,150 @@
     // ignore
   }
 })();
+</script>
 
-(function() {
-  // Countdown realtime + auto switch ke Expired + show/enable Renew
-  function pad(n) {
-    return n < 10 ? '0' + n : '' + n;
+<!-- SCRIPT 1: Tombol Copy / Renew (2-in-1, mirip generatekey.ejs) -->
+<script>
+(function () {
+  var buttons = document.querySelectorAll('[data-copy-or-renew]');
+  if (!buttons || !buttons.length) return;
+
+  function safeText(str, maxLen) {
+    if (typeof str !== 'string') str = String(str || '');
+    if (maxLen && maxLen > 0 && str.length > maxLen) {
+      return str.slice(0, maxLen);
+    }
+    return str;
   }
 
-  function formatMs(ms) {
+  buttons.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      if (btn.disabled) return;
+
+      var mode = btn.getAttribute('data-mode') || 'copy';
+      var token = btn.getAttribute('data-token') || '';
+
+      if (mode === 'renew') {
+        // Mode RENEW → submit form renew di row ini
+        var row = btn.closest('.getkey-row');
+        if (!row) return;
+        var renewForm = row.querySelector('[data-renew-form="1"]');
+        if (!renewForm) return;
+        renewForm.submit();
+        return;
+      }
+
+      // Mode COPY
+      token = safeText(token, 256);
+      if (!token) return;
+
+      var prev = btn.textContent;
+
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard
+          .writeText(token)
+          .then(function () {
+            btn.textContent = 'Copied';
+            setTimeout(function () {
+              btn.textContent = prev;
+            }, 1200);
+          })
+          .catch(function () {
+            btn.textContent = 'Failed';
+            setTimeout(function () {
+              btn.textContent = prev;
+            }, 1200);
+          });
+      } else {
+        var dummy = document.createElement('textarea');
+        dummy.value = token;
+        dummy.setAttribute('readonly', '');
+        dummy.style.position = 'fixed';
+        dummy.style.opacity = '0';
+        dummy.style.zIndex = '-1';
+        document.body.appendChild(dummy);
+        dummy.select();
+        try {
+          document.execCommand('copy');
+        } catch (e) {
+          console.warn('Copy failed', e);
+        }
+        document.body.removeChild(dummy);
+      }
+    });
+  });
+})();
+</script>
+
+<!-- SCRIPT 2: Countdown realtime + auto Expired + auto switch Copy → Renew -->
+<script>
+(function () {
+  var rows = document.querySelectorAll('.getkey-row[data-expire-ts]');
+  if (!rows || !rows.length) return;
+
+  var CAN_RENEW_GLOBAL = <%= canRenewGlobal ? 'true' : 'false' %>;
+
+  function formatRemaining(ms) {
+    if (!isFinite(ms)) return '-';
     if (ms <= 0) return 'Expired';
-    var sec = Math.floor(ms / 1000);
-    var h = Math.floor(sec / 3600);
-    var m = Math.floor((sec % 3600) / 60);
-    var s = sec % 60;
-    return pad(h) + ':' + pad(m) + ':' + pad(s);
-  }
 
-  var canRenewGlobal = document.body.getAttribute('data-can-renew-global') === '1';
+    var totalSec = Math.floor(ms / 1000);
+    var d = Math.floor(totalSec / 86400);
+    var h = Math.floor((totalSec % 86400) / 3600);
+    var m = Math.floor((totalSec % 3600) / 60);
+    var s = totalSec % 60;
+
+    var parts = [];
+    if (d > 0) parts.push(d + 'd');
+    if (h > 0 || d > 0) parts.push(h + 'h');
+    if (m > 0 || h > 0 || d > 0) parts.push(m + 'm');
+    parts.push(s + 's');
+    return parts.join(' ');
+  }
 
   function tick() {
     var now = Date.now();
-    var rows = document.querySelectorAll('.getkey-row[data-expires-ms]');
-    rows.forEach(function(row) {
-      var expStr = row.getAttribute('data-expires-ms');
-      if (!expStr) return;
-      var expMs = parseInt(expStr, 10);
-      if (!expMs || isNaN(expMs)) return;
 
-      var msLeft = expMs - now;
-      var timeCell   = row.querySelector('.getkey-time');
-      var badge      = row.querySelector('.getkey-status .badge');
-      var renewForm  = row.querySelector('.renew-form');
-      var renewBtn   = row.querySelector('.btn-renew');
+    rows.forEach(function (row) {
+      var expireStr = row.getAttribute('data-expire-ts');
+      if (!expireStr) return;
 
-      if (!timeCell) return;
+      var expireTs = parseInt(expireStr, 10);
+      if (!expireTs || !isFinite(expireTs)) return;
 
-      if (msLeft > 0) {
-        timeCell.textContent = formatMs(msLeft);
-      } else {
-        // Sudah expired
-        timeCell.textContent = 'Expired';
+      var labelEl = row.querySelector('.getkey-time-label');
+      if (!labelEl) return;
 
-        // Update badge ke Expired (warna inactive)
-        if (badge) {
+      var diff = expireTs - now;
+      labelEl.textContent = formatRemaining(diff);
+
+      var badge = row.querySelector('.getkey-status-badge');
+      var btn   = row.querySelector('[data-copy-or-renew]');
+
+      if (diff <= 0) {
+        // Expired
+        if (badge && !badge.dataset.expiredSet) {
           badge.classList.remove('badge-active');
           badge.classList.add('badge-inactive');
           badge.innerHTML = '<span class="badge-dot"></span>Expired';
+          badge.dataset.expiredSet = '1';
         }
 
-        // Tampilkan form Renew jika ada
-        if (renewForm) {
-          renewForm.style.display = '';
-        }
+        if (btn) {
+          // Ubah ke mode Renew
+          if (btn.getAttribute('data-mode') !== 'renew') {
+            btn.setAttribute('data-mode', 'renew');
+            btn.textContent = 'Renew';
+          }
 
-        // Enable tombol Renew hanya jika server mengizinkan (checkpoint ads)
-        if (renewBtn && canRenewGlobal) {
-          renewBtn.disabled = false;
+          // Enable / disable berdasarkan checkpoint server
+          if (CAN_RENEW_GLOBAL) {
+            btn.disabled = false;
+            btn.removeAttribute('aria-disabled');
+          } else {
+            btn.disabled = true;
+            btn.setAttribute('aria-disabled', 'true');
+          }
         }
       }
     });
@@ -371,6 +488,48 @@
 
   tick();
   setInterval(tick, 1000);
+})();
+</script>
+
+<!-- SCRIPT 3: Gate – satu checkpoint hanya boleh 1 aksi (Generate ATAU Renew) -->
+<script>
+(function () {
+  var newKeyForm = document.querySelector('form[data-new-key-form="1"]');
+  var newKeyBtn  = newKeyForm
+    ? newKeyForm.querySelector('button[type="submit"]')
+    : null;
+
+  function disableButton(btn) {
+    if (!btn) return;
+    btn.disabled = true;
+    btn.setAttribute('aria-disabled', 'true');
+  }
+
+  function disableAllRenewButtons() {
+    var buttons = document.querySelectorAll('[data-copy-or-renew][data-mode="renew"]');
+    buttons.forEach(function (btn) {
+      disableButton(btn);
+    });
+  }
+
+  // Jika form Renew mana pun submit → matikan Generate + Renew lainnya
+  var renewForms = document.querySelectorAll('form[data-renew-form="1"]');
+  if (renewForms && renewForms.length) {
+    renewForms.forEach(function (form) {
+      form.addEventListener('submit', function () {
+        if (newKeyBtn) disableButton(newKeyBtn);
+        disableAllRenewButtons();
+      });
+    });
+  }
+
+  // Jika Generate Free Key submit → matikan semua Renew
+  if (newKeyForm && newKeyBtn) {
+    newKeyForm.addEventListener('submit', function () {
+      disableAllRenewButtons();
+      disableButton(newKeyBtn);
+    });
+  }
 })();
 </script>
 
