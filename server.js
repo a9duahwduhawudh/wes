@@ -11,6 +11,8 @@ const multer = require('multer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+// Waktu start app (untuk uptime API bot)
+const PROCESS_START_TIME = Date.now();
 
 // ===== Multer untuk upload script (file .lua / .txt) =================
 
@@ -955,6 +957,13 @@ function computeStats(scripts) {
   const totalExecutions = scripts.reduce((acc, s) => acc + (s.uses || 0), 0);
   const totalUsers = scripts.reduce((acc, s) => acc + (s.users || 0), 0);
   return { totalGames, totalExecutions, totalUsers };
+}
+
+// uptime (detik) untuk API bot
+function getApiUptimeSeconds() {
+  const diffMs = Date.now() - PROCESS_START_TIME;
+  if (!Number.isFinite(diffMs) || diffMs < 0) return 0;
+  return Math.floor(diffMs / 1000);
 }
 
 /**
@@ -3512,6 +3521,209 @@ app.get(
     }
   }
 );
+
+// ===================================================================
+// Public Bot API untuk Discord (/api/bot/*)
+// ===================================================================
+
+// Helper: build payload stats ringan untuk bot
+async function buildBotStatsPayload() {
+  const { stats } = await buildAdminStats('all');
+  let totalKeys = 0;
+  let activeKeys = 0;
+
+  try {
+    const webKeysData = await buildWebKeysAdminData();
+    totalKeys = webKeysData.totalKeysCount || 0;
+    activeKeys = webKeysData.activeKeysCount || 0;
+  } catch (err) {
+    console.error('buildWebKeysAdminData in /api/bot/stats failed:', err);
+  }
+
+  let lastExecutionAt = null;
+  if (
+    stats &&
+    Array.isArray(stats.recentExecutions) &&
+    stats.recentExecutions.length
+  ) {
+    lastExecutionAt = stats.recentExecutions[0].executedAtIso;
+  }
+
+  return {
+    ok: true,
+    totalExecutions: stats.totalExecutions || 0,
+    usersCount: stats.totalUsers || 0,
+    scriptsCount: stats.totalScripts || stats.totalGames || 0,
+    totalKeys,
+    activeKeys,
+    lastExecutionAt,
+    apiUptimeSeconds: getApiUptimeSeconds()
+  };
+}
+
+app.get('/api/bot/stats', async (req, res) => {
+  try {
+    const payload = await buildBotStatsPayload();
+    return res.json(payload);
+  } catch (err) {
+    console.error('Failed to handle /api/bot/stats:', err);
+    return res.status(500).json({
+      ok: false,
+      error: 'bot_stats_error'
+    });
+  }
+});
+
+// Helper: simple tier berdasarkan totalExec
+function deriveUserTier(totalExec) {
+  if (!Number.isFinite(totalExec) || totalExec <= 0) return 'NEW';
+  if (totalExec > 5000) return 'DIAMOND';
+  if (totalExec > 2000) return 'PLATINUM';
+  if (totalExec > 500) return 'GOLD';
+  if (totalExec > 100) return 'SILVER';
+  if (totalExec > 10) return 'BRONZE';
+  return 'NEW';
+}
+
+// Helper: ambil profile user berdasarkan "userId" yang sama dengan discordId
+async function buildBotUserInfoPayload(discordId, discordTag) {
+  const id = String(discordId || '').trim();
+  const tag = discordTag ? String(discordTag).trim() : null;
+
+  if (!id) {
+    return {
+      success: false,
+      message: 'Missing discordId',
+      discordId: null,
+      discordTag: tag,
+      userTier: null,
+      totalExecutions: 0,
+      lastExecutionAt: null,
+      keys: []
+    };
+  }
+
+  const execUsers = await loadExecUsers();
+  const webKeys = await loadWebKeys();
+
+  const relatedExec = execUsers.filter(
+    (u) => u && String(u.userId || '') === id
+  );
+
+  let totalExecutions = 0;
+  let lastExecutionAt = null;
+
+  const pickLatest = (a, b) => {
+    const ta = a ? Date.parse(a) : NaN;
+    const tb = b ? Date.parse(b) : NaN;
+    if (Number.isNaN(ta) && Number.isNaN(tb)) return null;
+    if (Number.isNaN(ta)) return b;
+    if (Number.isNaN(tb)) return a;
+    return tb > ta ? b : a;
+  };
+
+  const keyObjects = [];
+
+  relatedExec.forEach((u) => {
+    const exec = u.totalExecutes || 0;
+    totalExecutions += exec;
+    lastExecutionAt = pickLatest(lastExecutionAt, u.lastExecuteAt);
+
+    if (u.keyToken) {
+      keyObjects.push({
+        key: String(u.keyToken),
+        token: String(u.keyToken),
+        source: 'exec',
+        scriptId: u.scriptId || null,
+        lastExecuteAt: u.lastExecuteAt || null
+      });
+    }
+  });
+
+  // webKeys userId disamakan dengan discordId (opsional)
+  webKeys.forEach((k) => {
+    if (!k || !k.token) return;
+    if (k.userId != null && String(k.userId) === id) {
+      keyObjects.push({
+        key: String(k.token),
+        token: String(k.token),
+        source: 'generate',
+        createdAt: k.createdAt || null,
+        expiresAt: k.expiresAt || null,
+        ip: k.ip || null
+      });
+    }
+  });
+
+  // Dedup token
+  const seen = new Set();
+  const uniqueKeys = [];
+  for (const k of keyObjects) {
+    const tok = String(k.token || k.key || '');
+    if (!tok || seen.has(tok)) continue;
+    seen.add(tok);
+    uniqueKeys.push(k);
+  }
+
+  if (!relatedExec.length && !uniqueKeys.length) {
+    return {
+      success: false,
+      message: 'No ExHub data linked for this ID.',
+      discordId: id,
+      discordTag: tag,
+      userTier: null,
+      totalExecutions: 0,
+      lastExecutionAt: null,
+      keys: []
+    };
+  }
+
+  const tier = deriveUserTier(totalExecutions);
+
+  return {
+    success: true,
+    discordId: id,
+    discordTag: tag,
+    userTier: tier,
+    totalExecutions,
+    lastExecutionAt,
+    keys: uniqueKeys
+  };
+}
+
+async function handleBotUserInfo(req, res) {
+  try {
+    const body = req.body || {};
+    const discordId =
+      body.discordId ||
+      req.query.discordId ||
+      null;
+    const discordTag =
+      body.discordTag ||
+      req.query.discordTag ||
+      null;
+
+    const payload = await buildBotUserInfoPayload(discordId, discordTag);
+    return res.json(payload);
+  } catch (err) {
+    console.error('Failed to handle /api/bot/user-info:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'internal_error'
+    });
+  }
+}
+
+app.post('/api/bot/user-info', handleBotUserInfo);
+app.get('/api/bot/user-info', handleBotUserInfo);
+
+// Optional ping endpoint untuk healthcheck bot
+app.get('/api/bot/ping', (req, res) => {
+  res.json({
+    ok: true,
+    uptimeSeconds: getApiUptimeSeconds()
+  });
+});
 
 // ===================================================================
 // Public endpoint untuk Private Raw Links: /:id.raw
