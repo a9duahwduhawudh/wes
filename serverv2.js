@@ -816,6 +816,7 @@ module.exports = function mountDiscordOAuth(app) {
         // tidak fatal
       }
 
+      // Tambahkan banner ke session untuk dipakai dashboard.ejs
       req.session.discordUser = {
         id: user.id,
         username: user.username,
@@ -824,6 +825,7 @@ module.exports = function mountDiscordOAuth(app) {
         avatar: user.avatar,
         email: user.email,
         guildCount,
+        banner: user.banner, // <— field baru untuk Banner
       };
 
       res.redirect("/dashboard");
