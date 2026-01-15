@@ -91,6 +91,11 @@ const FREE_KEY_MAX_PER_USER = 5;
 const REQUIRE_FREEKEY_ADS_CHECKPOINT =
   String(process.env.REQUIREFREEKEY_ADS_CHECKPOINT || "1") === "1";
 
+// Cooldown anti spam "Open" dari provider (ms). Default 5 menit.
+const FREEKEY_ADS_COOLDOWN_MS = Number(
+  process.env.FREEKEY_ADS_COOLDOWN_MS || 5 * 60 * 1000
+);
+
 function nowMs() {
   return Date.now();
 }
@@ -228,6 +233,7 @@ async function getFreeKeysForUserPersistent(userId) {
 //   linkvertise:{ ts: <number>, used: <bool> }
 // }
 // 1 checkpoint = 1 aksi (Generate ATAU Renew)
+// ts: waktu terakhir checkpoint dibuat
 // ---------------------------------------------------------
 
 function canonicalAdsProvider(raw) {
@@ -262,6 +268,8 @@ function markAdsUsed(req, provider) {
     ts: nowMs(),
     used: false,
   };
+  // Tidak ubah ts di sini, supaya ts
+  // tetap waktu checkpoint (iklan) terakhir.
   prev.used = true;
   req.session.freeKeyAdsState[provider] = prev;
 }
@@ -304,7 +312,7 @@ module.exports = function mountDiscordOAuth(app) {
 
   // =========================
   // MIDDLEWARE: res.locals.user (untuk header EJS, dll)
-// =========================
+  // =========================
   app.use((req, res, next) => {
     res.locals.user = (req.session && req.session.discordUser) || null;
     next();
@@ -472,6 +480,24 @@ module.exports = function mountDiscordOAuth(app) {
 
     // Jika selesai iklan (?done=1), tandai checkpoint & redirect ke URL bersih (?ads=...)
     if (doneFlag && req.session) {
+      const existingState = getAdsState(req, adsProvider);
+      const now = nowMs();
+
+      // Anti-spam server-side:
+      // Kalau checkpoint terakhir SUDAH dipakai (used === true)
+      // dan masih dalam window FREEKEY_ADS_COOLDOWN_MS,
+      // jangan bikin checkpoint baru (anggap spam "Open" dari ads).
+      if (
+        existingState &&
+        existingState.used &&
+        existingState.ts &&
+        now - existingState.ts < FREEKEY_ADS_COOLDOWN_MS
+      ) {
+        return res.redirect(
+          "/getfreekey?ads=" + encodeURIComponent(adsProvider)
+        );
+      }
+
       setAdsCheckpoint(req, adsProvider);
       return res.redirect("/getfreekey?ads=" + encodeURIComponent(adsProvider));
     }
@@ -639,7 +665,7 @@ module.exports = function mountDiscordOAuth(app) {
   // API: GET /api/freekey/isValidate/:key
   // Pola JSON mirip /api/isValidate di server.js:
   // { valid, deleted, expired, info: { token, createdAt, byIp, userId, expiresAfter, linkId } }
-// --------------------------------------------------
+  // --------------------------------------------------
   app.get("/api/freekey/isValidate/:key", async (req, res) => {
     const token = (req.params.key || "").trim();
     const now = nowMs();
