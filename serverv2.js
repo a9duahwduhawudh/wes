@@ -359,8 +359,7 @@ async function setPaidKeyRecord(payload) {
 }
 
 /**
- * Ambil semua PaidKey milik Discord ID tertentu (untuk dashboard).
- * Dikonversi ke shape keyData.keys yang dipakai dashboard.
+ * Ambil semua PaidKey milik Discord ID tertentu (untuk dashboard & /api/bot/user-info).
  */
 async function getPaidKeysForUserPersistent(discordId) {
   if (!hasFreeKeyKV) return [];
@@ -407,6 +406,8 @@ async function getPaidKeysForUserPersistent(discordId) {
       expired,
       deleted,
       type: rec.type || null,
+      createdAt: rec.createdAt || null,
+      ownerDiscordId: rec.ownerDiscordId || null,
     });
   }
 
@@ -549,7 +550,7 @@ module.exports = function mountDiscordOAuth(app) {
     next();
   }
 
-  // Ambil data key user untuk Dashboard
+  // Ambil data key user untuk Dashboard (web)
   async function getUserKeys(discordUser) {
     const result = {
       total: 0,
@@ -1067,6 +1068,177 @@ module.exports = function mountDiscordOAuth(app) {
   });
 
   // --------------------------------------------------
+  // API: POST /api/bot/user-info
+  //  Dipakai oleh:
+  //   - Dashboard (opsional untuk banned / profil)
+  //   - Discord Bot (/mykey, /checkmykey, fetchUserPaidKeys)
+// --------------------------------------------------
+  app.post("/api/bot/user-info", async (req, res) => {
+    const body = req.body || {};
+    const rawId =
+      body.discordId ||
+      (body.user && body.user.id) ||
+      (body.profile && body.profile.id);
+    const discordId = rawId ? String(rawId) : null;
+    const discordTag = body.discordTag || null;
+
+    if (!discordId) {
+      return res.status(400).json({
+        ok: false,
+        error: "DISCORD_ID_REQUIRED",
+      });
+    }
+
+    let profile = null;
+    if (hasFreeKeyKV) {
+      try {
+        profile = await kvGetJson(discordUserProfileKey(discordId));
+      } catch (err) {
+        console.warn("[serverv2] read discord profile KV error:", err);
+      }
+    }
+
+    let paidKeysRaw = [];
+    let freeKeysRaw = [];
+    try {
+      paidKeysRaw = await getPaidKeysForUserPersistent(discordId);
+    } catch (err) {
+      console.error("[serverv2] getPaidKeysForUserPersistent (user-info) error:", err);
+    }
+
+    try {
+      freeKeysRaw = await getFreeKeysForUserPersistent(discordId);
+    } catch (err) {
+      console.error("[serverv2] getFreeKeysForUserPersistent (user-info) error:", err);
+    }
+
+    const now = nowMs();
+
+    // Normalisasi paid keys → bentuk flat yang mudah dibaca bot
+    const paidKeys = paidKeysRaw
+      .map((k) => {
+        if (!k) return null;
+        const token = String(k.token || k.key || "");
+        if (!token) return null;
+
+        const provider = k.provider || "exhub-paid";
+        const typeRaw = (k.type || "").toString().toLowerCase();
+        const type =
+          typeRaw === "month" || typeRaw === "lifetime" ? typeRaw : typeRaw || "paid";
+        const tier = k.tier || (type === "month" || type === "lifetime" ? "Paid" : "Paid");
+
+        const statusStr = (k.status || "").toLowerCase();
+        const valid =
+          typeof k.valid === "boolean"
+            ? k.valid
+            : statusStr === "active";
+        const deleted =
+          typeof k.deleted === "boolean"
+            ? k.deleted
+            : statusStr === "deleted";
+        const expiresAfter =
+          typeof k.expiresAfter === "number"
+            ? k.expiresAfter
+            : typeof k.expiresAtMs === "number"
+            ? k.expiresAtMs
+            : null;
+        const expired =
+          typeof k.expired === "boolean"
+            ? k.expired
+            : expiresAfter
+            ? now > expiresAfter
+            : false;
+
+        return {
+          token,
+          key: token,
+          provider,
+          source: provider,
+          tier,
+          type,
+          createdAt: k.createdAt || null,
+          expiresAfter,
+          expiresAtMs: expiresAfter,
+          valid,
+          deleted,
+          expired,
+          ownerDiscordId: k.ownerDiscordId || discordId,
+        };
+      })
+      .filter(Boolean);
+
+    // Normalisasi free keys → diberi type/tier "free" & provider work.ink / linkvertise
+    const freeKeys = freeKeysRaw.map((fk) => {
+      const token = fk.token;
+      const statusStr = (fk.status || "").toLowerCase();
+      const expiresAfter =
+        typeof fk.expiresAfter === "number" ? fk.expiresAfter : null;
+
+      const providerLabel = String(fk.provider || "ExHub Free").toLowerCase();
+      let provider = "exhub-free";
+      if (providerLabel === "work.ink" || providerLabel === "workink") {
+        provider = "work.ink";
+      } else if (providerLabel.indexOf("linkvertise") !== -1) {
+        provider = "linkvertise";
+      }
+
+      const expired =
+        expiresAfter && typeof expiresAfter === "number"
+          ? now > expiresAfter
+          : statusStr === "expired";
+      const valid = statusStr === "active" && !expired;
+
+      return {
+        token,
+        key: token,
+        provider,
+        source: provider,
+        tier: "free",
+        type: "free",
+        createdAt: null,
+        expiresAfter,
+        expiresAtMs: expiresAfter,
+        valid,
+        deleted: false,
+        expired,
+        free: true,
+        ownerDiscordId: discordId,
+      };
+    });
+
+    const allKeys = paidKeys.concat(freeKeys);
+
+    const activeCount = allKeys.filter(
+      (k) => k.valid && !k.deleted && !k.expired
+    ).length;
+
+    const summary = {
+      total: allKeys.length,
+      paid: paidKeys.length,
+      free: freeKeys.length,
+      active: activeCount,
+    };
+
+    const banned =
+      (profile && profile.banned === true) ||
+      (typeof body.banned === "boolean" && body.banned === true)
+        ? true
+        : false;
+
+    return res.json({
+      ok: true,
+      discordId,
+      discordTag,
+      banned,
+      profile: profile || null,
+      paidKeys,
+      freeKeys,
+      keys: allKeys,
+      summary,
+    });
+  });
+
+  // --------------------------------------------------
   // API kecil: GET /api/discord/owners
   // --------------------------------------------------
   app.get("/api/discord/owners", (req, res) => {
@@ -1235,6 +1407,6 @@ module.exports = function mountDiscordOAuth(app) {
   });
 
   console.log(
-    "[serverv2] Discord OAuth + Dashboard + GetFreeKey + FreeKey API + PaidKey API routes mounted."
+    "[serverv2] Discord OAuth + Dashboard + GetFreeKey + FreeKey API + PaidKey API + Bot User-Info API routes mounted."
   );
 };
