@@ -354,7 +354,7 @@
       white-space: nowrap;
     }
 
-    /* Header actions (Monitor Keys + Logout) */
+    /* Header actions (Monitor Keys + Monitor Discord + Logout) */
     .header-actions {
       display: flex;
       align-items: center;
@@ -432,9 +432,10 @@
       <span class="logo-text" id="logo-text">ExHub — Admin Dashboard</span>
     </div>
 
-    <!-- ACTIONS: Monitor Keys + Logout -->
+    <!-- ACTIONS: Monitor Keys + Monitor Discord + Logout -->
     <div class="header-actions">
       <a href="/admin/keys" class="btn-ghost btn-small">Monitor Keys</a>
+      <a href="/admin/discord" class="btn-ghost btn-small">Monitor Discord</a>
       <form method="post" action="/admin/logout" class="header-action">
         <button class="btn-ghost btn-small" type="submit">Logout</button>
       </form>
