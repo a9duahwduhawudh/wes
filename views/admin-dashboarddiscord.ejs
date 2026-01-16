@@ -178,7 +178,7 @@
 
           <% if (userStats && userStats.length > 0) { %>
             <div class="table-wrapper key-admin-table-wrapper">
-              <table class="table table-compact key-table-activity">
+              <table class="table table-compact key-table-activity" id="discord-users-table">
                 <thead>
                   <tr>
                     <th>Discord User</th>
@@ -194,6 +194,7 @@
                   <% userStats.forEach(function(row) { %>
                     <tr
                       class="<%= selectedUser && selectedUser.discordId === row.discordId ? 'key-row-highlight' : '' %>"
+                      data-discord-id="<%= row.discordId %>"
                     >
                       <!-- DISCORD USER -->
                       <td class="table-main-text">
@@ -221,6 +222,11 @@
                             <div class="table-sub-text mono">
                               ID: <%= row.discordId %>
                             </div>
+                            <% if (typeof row.guildCount !== 'undefined') { %>
+                              <div class="table-sub-text">
+                                Guilds: <%= row.guildCount %> server
+                              </div>
+                            <% } %>
                           </div>
                         </div>
                       </td>
@@ -378,6 +384,17 @@
               </p>
             </div>
           <% } else { %>
+            <!-- BANNER (JIKA ADA) -->
+            <% if (selectedUser.bannerUrl) { %>
+              <div class="discord-user-banner" style="margin-bottom:10px;">
+                <img
+                  src="<%= selectedUser.bannerUrl %>"
+                  alt="Banner"
+                  style="width:100%;max-height:140px;object-fit:cover;border-radius:12px;"
+                />
+              </div>
+            <% } %>
+
             <!-- SUMMARY TILE USER -->
             <div class="discord-user-summary" style="margin-bottom:14px;">
               <div class="discord-user-summary-main">
@@ -407,6 +424,11 @@
                   <% if (typeof selectedUser.guildCount !== 'undefined') { %>
                     <div class="table-sub-text">
                       Guilds: <%= selectedUser.guildCount %> server
+                    </div>
+                  <% } %>
+                  <% if (selectedUser.email) { %>
+                    <div class="table-sub-text mono">
+                      Email: <%= selectedUser.email %>
                     </div>
                   <% } %>
                 </div>
@@ -668,7 +690,7 @@
     </div>
   </div>
 
-  <!-- ==================== JS: Live Countdown (Reuse) ==================== -->
+  <!-- ==================== JS: Live Countdown ==================== -->
   <script>
     (function () {
       // Realtime countdown "Time left" menggunakan expiresAtMs dari server
