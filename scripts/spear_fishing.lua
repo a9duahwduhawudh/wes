@@ -46,8 +46,8 @@ local LANG = (localePrefix == "id") and "id" or "en"
 
 local STRINGS = {
     -- TITLE / HEADER
-    ["title.panel"]          = { id = "🧭 ExHub Panel v1.3 [BETA]",              en = "🧭 ExHub Panel v1.3 [BETA]" },
-    ["title.loader"]         = { id = "🧭 ExHub Panel v1.3 [BETA]",              en = "🧭 ExHub Panel v1.3 [BETA]" },
+    ["title.panel"]          = { id = "🧭 ExHub Panel v1.3+ [BETA]",              en = "🧭 ExHub Panel v1.3+ [BETA]" },
+    ["title.loader"]         = { id = "🧭 ExHub Panel v1.3+ [BETA]",              en = "🧭 ExHub Panel v1.3+ [BETA]" },
 
     -- LOADER
     ["loader.loading"]       = { id = "Memuat",                           en = "Loading" },
@@ -80,12 +80,12 @@ local STRINGS = {
         id = "(Key tidak tersedia / tidak valid)",
         en = "(Key not available / invalid)"
     },
-    ["keyinfo.clearbtn"]     = { id = "Hapus Key Tersimpan",                   en = "Clear Saved Key" },
+    ["keyinfo.clearbtn"]     = { id = "Hapus Key Tersimpan",              en = "Clear Saved Key" },
     ["keyinfo.clear.notify"] = {
         id = "Key tersimpan telah dihapus. Panel akan ditutup dan ExHub akan meminta key baru.",
         en = "Saved key has been cleared. Panel will close and ExHub will ask for a new key."
     },
-    ["keyinfo.expired.status"] = { id = "KADALUWARSA",                         en = "EXPIRED" },
+    ["keyinfo.expired.status"] = { id = "KADALUWARSA",                    en = "EXPIRED" },
     ["keyinfo.expired.notify"] = {
         id = "Masa aktif key telah habis. Panel akan ditutup, silakan ambil key baru.",
         en = "Key lifetime has expired. Panel will close, please get a new key."
@@ -99,8 +99,15 @@ local STRINGS = {
     },
     ["keyui.placeholder"]    = { id = "Paste key di sini...",              en = "Paste key here..." },
     ["keyui.enter"]          = { id = "Masukkan Key",                      en = "Enter Key" },
-    ["keyui.get"]            = { id = "Dapatkan Key",                      en = "Get Key" },
-    ["keyui.discord"]        = { id = "Copy Discord",                      en = "Copy Discord" },
+    ["keyui.get"]            = { id = "Dapatkan Key Work.Ink",            en = "Get Key Work.Ink" },
+
+    -- NEW: Linkvertise button label + notify
+    ["keyui.get.linkvertise"] = {
+        id = "Dapatkan Key Linkvertise",
+        en = "Get Key Linkvertise"
+    },
+
+    ["keyui.discord"]        = { id = "Salin Discord",                     en = "Copy Discord" },
     ["keyui.reset"]          = { id = "Reset Key Tersimpan",              en = "Reset Saved Key" },
     ["keyui.valid"]          = {
         id = "Key valid. Membuka ExHub...",
@@ -118,6 +125,13 @@ local STRINGS = {
         id = "Link get key sudah disalin ke clipboard:",
         en = "Get key link copied to clipboard:"
     },
+
+    -- NEW: Linkvertise notify text
+    ["keyui.linkvertise.notify"] = {
+        id = "Link Linkvertise sudah disalin ke clipboard:",
+        en = "Linkvertise key link copied to clipboard:"
+    },
+
     ["keyui.discord.notify"] = {
         id = "Link Discord ExHub sudah disalin ke clipboard.",
         en = "ExHub Discord link copied to clipboard."
@@ -258,10 +272,18 @@ end
 ----------------------------------------------------------
 local KEY_FOLDER         = "ExHub"
 local KEY_FILE           = KEY_FOLDER .. "/SavedKey.txt"
-local KEY_LINK_URL       = "https://work.ink/23P2/yabm2hs6"
-local KEY_API_TEMPLATE   = "https://work.ink/_api/v2/token/isValid/%s"
+local KEY_LINK_URL       = "https://exc-webs.vercel.app/getfreekey?ads=workink" -- "https://work.ink/23P2/yabm2hs6"
+
+-- NEW: Linkvertise generate-key URL
+local KEY_LINK_LINKVERTISE = "https://exc-webs.vercel.app/getfreekey?ads=linkvertise"
+
+-- NEW: API validasi key pindah ke exc-webs
+local KEY_API_TEMPLATE    = "https://exc-webs.vercel.app/api/freekey/isValidate/%s"
+-- NEW: API validasi PAID key
+local KEY_API_TEMPLATE2   = "https://exc-webs.vercel.app/api/paidkey/isValidate/%s"
+
 local KEY_VALID_SOUND_ID = "rbxassetid://232127604"
-local KEY_DISCORD        = "https://discord.gg/exhb"
+local KEY_DISCORD        = "https://discord.com/invite/VsFQq5s6"
 
 -- DISCORD WEBHOOK CONFIG (DEFAULT, TANPA TOGGLE)
 local WEBHOOK_URL            = "https://discord.com/api/webhooks/1459827420952789044/eshKuUTPTIflZCzXOchW8sPEY-p72oEVkTpQgtGSXw1ygQy8P-CnRUuUVXQqe23UMrTk"
@@ -535,7 +557,7 @@ local function formatIndoDate(unixSeconds)
     local t = os.date("*t", unixSeconds)
 
     local hariListId  = { "Minggu","Senin","Selasa","Rabu","Kamis","Jumat","Sabtu" }
-    local bulanListId = { "Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des" }
+    local bulanListId = { "Jan","Feb","Mar","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des" }
 
     local hariListEn  = { "Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday" }
     local bulanListEn = { "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec" }
@@ -621,12 +643,25 @@ local function validateKeyWithServer(key)
         return false, (LANG == "id" and "Key tidak boleh kosong." or "Key cannot be empty."), nil
     end
 
-    local url = string.format(KEY_API_TEMPLATE, key)
+    -- Pilih endpoint berdasarkan tipe key:
+    --  - Free key  -> KEY_API_TEMPLATE  (/api/freekey/...)
+    --  - Paid key  -> KEY_API_TEMPLATE2 (/api/paidkey/...), deteksi dari prefix "EXHUBPAID-"
+    local urlTemplate = KEY_API_TEMPLATE
+    do
+        local upperKey = string.upper(key)
+        if string.sub(upperKey, 1, 10) == "EXHUBPAID-" then
+            urlTemplate = KEY_API_TEMPLATE2
+        end
+    end
+
+    local url = string.format(urlTemplate, key)
     local data, err = fetchJson(url)
     if not data then
         return false, err or (LANG == "id" and "Gagal mengambil data key." or "Failed to fetch key data."), nil
     end
 
+    -- Diasumsikan struktur JSON masih mengikuti Work.ink/ExHub:
+    -- data.valid == true, data.deleted ~= true, data.info.createdAt, data.info.expiresAfter
     if data.valid ~= true or data.deleted == true then
         return false, (LANG == "id" and "Key tidak valid / sudah expired." or "Key invalid / expired."), data
     end
@@ -1456,8 +1491,8 @@ local function buildCoreUI()
     local TabDefs = {
         {Id="spectateespp",   Label="Spectate + ESP",   Order=1,  SourceType="url", Source="https://raw.githubusercontent.com/rophunihcuks/rophuexhub/refs/heads/main/1ExTab_SpectateESP.lua"},
         {Id="utilitas",       Label="Utility",          Order=2,  SourceType="url", Source="https://raw.githubusercontent.com/rophunihcuks/rophuexhub/refs/heads/main/2ExTab_Utilitas.lua"},
-        {Id="spearfishmisc",   Label="SpearFish Misc",    Order=3, GameId=8741232785, SourceType="url", Source=SPEAR_URL_ACTIVE},
-        {Id="spearfishfarms", Label="SpearFish Farm",   Order=4, GameId=8741232785, SourceType="url", Source="https://raw.githubusercontent.com/rophunihcuks/rophuexhub/refs/heads/main/4ExTab_SpearFishFarm.lua"},
+        {Id="spearfishmisc",  Label="SpearFish Misc",   Order=3,  GameId=8741232785, SourceType="url", Source=SPEAR_URL_ACTIVE},
+        {Id="spearfishfarms", Label="SpearFish Farm",   Order=4,  GameId=8741232785, SourceType="url", Source="https://raw.githubusercontent.com/rophunihcuks/rophuexhub/refs/heads/main/4ExTab_SpearFishFarm.lua"},
         --{Id="sellallfish", Label="Sell Fish",   Order=5, GameId=8741232785, SourceType="url", Source="https://raw.githubusercontent.com/rophunihcuks/rophuexhub/refs/heads/main/5ExTab_SellAllFish.lua"},
     }
 
@@ -2061,7 +2096,7 @@ local function buildCoreUI()
         New("UICorner",{CornerRadius=UDim.new(0,8)})
     })
 
-    -- NEW: Join Discord button next to Clear Saved Key
+    -- Join Discord button di Tab Setting
     local joinDiscordSettingBtn = New("TextButton",{
         Text = (LANG == "id") and "Gabung Discord" or "Join Discord",
         Size = UDim2.fromOffset(130,26),
@@ -2362,32 +2397,52 @@ local function createKeyGui(initialKey)
         New("UICorner",{CornerRadius = UDim.new(0,8)})
     })
 
-    local btnDiscord = New("TextButton", {
-        Position = UDim2.new(0,14,0,162),
-        Size = UDim2.new(0.5,-18,0,24),
+    -- Row bawah: 3 tombol (Linkvertise, Discord, Reset)
+    local buttonRowY      = 162
+    local thirdWidthScale = 1/3
+    local thirdWidthOff   = -20
+
+    local btnLinkvertise = New("TextButton", {
+        Position = UDim2.new(0,14,0,buttonRowY),
+        Size     = UDim2.new(thirdWidthScale,thirdWidthOff,0,24),
         BackgroundColor3 = Color3.fromRGB(230,234,250),
-        BorderSizePixel = 0,
-        AutoButtonColor = true,
-        Font = Enum.Font.Gotham,
-        TextSize = 12,
-        TextColor3 = Color3.fromRGB(70,80,130),
-        Text = L("keyui.discord"),
-        Parent = card
+        BorderSizePixel  = 0,
+        AutoButtonColor  = true,
+        Font             = Enum.Font.Gotham,
+        TextSize         = 12,
+        TextColor3       = Color3.fromRGB(70,80,130),
+        Text             = L("keyui.get.linkvertise"),
+        Parent           = card
+    },{
+        New("UICorner",{CornerRadius = UDim.new(0,8)})
+    })
+
+    local btnDiscord = New("TextButton", {
+        Position = UDim2.new(thirdWidthScale,14,0,buttonRowY),
+        Size     = UDim2.new(thirdWidthScale,thirdWidthOff,0,24),
+        BackgroundColor3 = Color3.fromRGB(230,234,250),
+        BorderSizePixel  = 0,
+        AutoButtonColor  = true,
+        Font             = Enum.Font.Gotham,
+        TextSize         = 12,
+        TextColor3       = Color3.fromRGB(70,80,130),
+        Text             = L("keyui.discord"),
+        Parent           = card
     }, {
         New("UICorner",{CornerRadius = UDim.new(0,8)})
     })
 
     local btnReset = New("TextButton", {
-        Position = UDim2.new(0.5,4,0,162),
-        Size = UDim2.new(0.5,-18,0,24),
+        Position = UDim2.new(thirdWidthScale*2,14,0,buttonRowY),
+        Size     = UDim2.new(thirdWidthScale,thirdWidthOff,0,24),
         BackgroundColor3 = Color3.fromRGB(240,220,220),
-        BorderSizePixel = 0,
-        AutoButtonColor = true,
-        Font = Enum.Font.Gotham,
-        TextSize = 12,
-        TextColor3 = Color3.fromRGB(120,40,40),
-        Text = L("keyui.reset"),
-        Parent = card
+        BorderSizePixel  = 0,
+        AutoButtonColor  = true,
+        Font             = Enum.Font.Gotham,
+        TextSize         = 12,
+        TextColor3       = Color3.fromRGB(120,40,40),
+        Text             = L("keyui.reset"),
+        Parent           = card
     }, {
         New("UICorner",{CornerRadius = UDim.new(0,8)})
     })
@@ -2404,6 +2459,7 @@ local function createKeyGui(initialKey)
     end
     hookHover(btnEnter)
     hookHover(btnGet)
+    hookHover(btnLinkvertise)
     hookHover(btnDiscord)
     hookHover(btnReset)
     hookHover(closeBtn)
@@ -2456,6 +2512,11 @@ local function createKeyGui(initialKey)
     btnGet.MouseButton1Click:Connect(function()
         safeSetClipboard(KEY_LINK)
         notify("ExHub Key", L("keyui.get.notify").."\n"..KEY_LINK)
+    end)
+
+    btnLinkvertise.MouseButton1Click:Connect(function()
+        safeSetClipboard(KEY_LINK_LINKVERTISE)
+        notify("ExHub Key", L("keyui.linkvertise.notify").."\n"..KEY_LINK_LINKVERTISE)
     end)
 
     btnDiscord.MouseButton1Click:Connect(function()
