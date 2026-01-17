@@ -7,7 +7,7 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <meta name="color-scheme" content="dark" />
   <link rel="icon" type="image/png" href="/img/ExLogo2.png" />
-  <!-- GANTI KE CSS V2 -->
+  <!-- CSS PANEL V2 -->
   <link rel="stylesheet" href="/css/mainv2.css" />
 </head>
 <body class="page-dark admin-page admin-page--discord">
@@ -208,7 +208,7 @@
                 <tbody>
                   <% userStats.forEach(function(row) { %>
                     <tr
-                      class="discord-user-row <%= selectedUser && selectedUser.discordId === row.discordId ? 'key-row-highlight' : '' %>"
+                      class="discord-user-row <%= selectedUser && selectedUser.discordId === row.discordId ? 'key-row-highlight' : '' %> <%= row.banned ? 'discord-user-row--banned' : '' %>"
                       data-discord-id="<%= row.discordId %>"
                     >
                       <!-- DISCORD USER -->
@@ -456,28 +456,28 @@
                       <div class="discord-user-summary-label">Total Keys</div>
                       <div class="discord-user-summary-value">
                         <%= selectedUserSummary && typeof selectedUserSummary.total !== 'undefined'
-                              ? selectedUserSummary.total : (selectedUser.totalKeys || 0) %>
+                              ? selectedUserSummary.total : 0 %>
                       </div>
                     </div>
                     <div class="discord-user-summary-pill">
                       <div class="discord-user-summary-label">Paid</div>
                       <div class="discord-user-summary-value">
                         <%= selectedUserSummary && typeof selectedUserSummary.paid !== 'undefined'
-                              ? selectedUserSummary.paid : (selectedUser.paidKeys || 0) %>
+                              ? selectedUserSummary.paid : 0 %>
                       </div>
                     </div>
                     <div class="discord-user-summary-pill">
                       <div class="discord-user-summary-label">Free</div>
                       <div class="discord-user-summary-value">
                         <%= selectedUserSummary && typeof selectedUserSummary.free !== 'undefined'
-                              ? selectedUserSummary.free : (selectedUser.freeKeys || 0) %>
+                              ? selectedUserSummary.free : 0 %>
                       </div>
                     </div>
                     <div class="discord-user-summary-pill">
                       <div class="discord-user-summary-label">Active</div>
                       <div class="discord-user-summary-value">
                         <%= selectedUserSummary && typeof selectedUserSummary.active !== 'undefined'
-                              ? selectedUserSummary.active : (selectedUser.activeKeys || 0) %>
+                              ? selectedUserSummary.active : 0 %>
                       </div>
                     </div>
                     <div class="discord-user-summary-pill">
@@ -542,7 +542,10 @@
                       </thead>
                       <tbody>
                         <% selectedUserKeys.forEach(function(k) { %>
-                          <tr id="discord-<%= encodeURIComponent(selectedUser.discordId) %>-token-<%= encodeURIComponent(k.token || k.key) %>">
+                          <tr
+                            id="discord-<%= encodeURIComponent(selectedUser.discordId) %>-token-<%= encodeURIComponent(k.token || k.key) %>"
+                            data-key-tier="<%= k.free ? 'free' : 'paid' %>"
+                          >
                             <!-- TOKEN -->
                             <td class="key-cell-token">
                               <div class="token-row">
@@ -606,13 +609,9 @@
                                       type="text"
                                       name="expiresAt"
                                       class="key-input key-input-sm admin-ttl-input"
-                                      value="<%=
-                                        (k.status === 'Active' &&
-                                         k.timeLeftLabel &&
-                                         k.timeLeftLabel !== 'Expired')
-                                          ? k.timeLeftLabel
-                                          : ''
-                                      %>"
+                                      inputmode="numeric"
+                                      pattern="[0-9:]*"
+                                      value="<%= (k.status === 'Active' && k.timeLeftLabel && k.timeLeftLabel !== 'Expired') ? k.timeLeftLabel : '' %>"
                                       placeholder="HH:MM:SS"
                                       autocomplete="off"
                                     />
@@ -649,6 +648,8 @@
                                   statusLabel === 'Active'
                                     ? 'status-pill status-pill--active'
                                     : statusLabel === 'Expired'
+                                    ? 'status-pill status-pill--expired'
+                                    : statusLabel === 'Deleted'
                                     ? 'status-pill status-pill--expired'
                                     : 'status-pill status-pill--pending';
                               %>
@@ -790,6 +791,7 @@
       });
     })();
   </script>
+
   <!-- Proteksi dasar: blokir klik kanan + beberapa shortcut DevTools -->
   <script src="/js/protect-devtools.js"></script>
 </body>
