@@ -1721,3 +1721,769 @@ module.exports = function mountDiscordOAuth(app) {
       return res.render("admin-dashboarddiscord", {
         title: "Admin – Discord Key Manager",
         totalDiscordUsers: 0,
+        totalKeysCount: 0,
+        totalPaidKeysCount: 0,
+        totalFreeKeysCount: 0,
+        activeKeysCount: 0,
+        bannedUsersCount: 0,
+        query,
+        filter,
+        userStats: [],
+        selectedUser: null,
+        selectedUserSummary: null,
+        selectedUserKeys: [],
+        freeKeyUiConfig,
+        freeKeyTtlHours,
+        paidPlanConfig,
+      });
+    }
+
+    let discordIds = [];
+    try {
+      discordIds = await getAllDiscordUserIds();
+    } catch (err) {
+      console.error("[serverv2] getAllDiscordUserIds error:", err);
+      discordIds = [];
+    }
+
+    const perUserData = [];
+    let totalKeysCount = 0;
+    let totalPaidKeysCount = 0;
+    let totalFreeKeysCount = 0;
+    let activeKeysCount = 0;
+    let bannedUsersCount = 0;
+
+    for (const discordId of discordIds) {
+      try {
+        const [profileRaw, paidKeysRaw, freeKeysRaw] = await Promise.all([
+          getDiscordUserProfile(discordId),
+          getPaidKeysForUserPersistent(discordId),
+          getFreeKeysForUserPersistent(discordId),
+        ]);
+
+        if (
+          !profileRaw &&
+          (!paidKeysRaw || paidKeysRaw.length === 0) &&
+          (!freeKeysRaw || freeKeysRaw.length === 0)
+        ) {
+          continue;
+        }
+
+        const profile = profileRaw || { id: discordId };
+        const normalizedPaid = (paidKeysRaw || [])
+          .map((k) => normalizePaidKeyForAdmin(k, discordId))
+          .filter(Boolean);
+        const normalizedFree = (freeKeysRaw || [])
+          .map((fk) => normalizeFreeKeyForAdmin(fk, discordId))
+          .filter(Boolean);
+
+        const keysAll = normalizedPaid.concat(normalizedFree);
+
+        const summary = {
+          total: keysAll.length,
+          paid: normalizedPaid.length,
+          free: normalizedFree.length,
+          active: keysAll.filter((k) => k.status === "Active").length,
+        };
+
+        const lastLoginAtMs =
+          typeof profile.lastLoginAt === "number"
+            ? profile.lastLoginAt
+            : null;
+        const loginLabels = lastLoginAtMs
+          ? formatDualTimeLabelMs(lastLoginAtMs)
+          : { wita: null, wib: null, label: null };
+
+        const latestExpireMs = keysAll.reduce((max, k) => {
+          if (!k.expiresAtMs || typeof k.expiresAtMs !== "number")
+            return max;
+          return k.expiresAtMs > max ? k.expiresAtMs : max;
+        }, 0);
+
+        const expireLabels = latestExpireMs
+          ? formatDualTimeLabelMs(latestExpireMs)
+          : { wita: null, wib: null, label: null };
+
+        const banned = !!profile.banned;
+
+        if (banned) bannedUsersCount++;
+        totalKeysCount += summary.total;
+        totalPaidKeysCount += summary.paid;
+        totalFreeKeysCount += summary.free;
+        activeKeysCount += summary.active;
+
+        const username = profile.username || "Unknown";
+        const globalName = profile.global_name || username;
+        const discriminator = profile.discriminator || "0000";
+        const tag = `${username}#${discriminator}`;
+        const avatarUrl = makeDiscordAvatarUrl(profile);
+        const bannerUrl = makeDiscordBannerUrl(profile);
+        const email = profile.email || null;
+
+        perUserData.push({
+          discordId,
+          username,
+          globalName,
+          discriminator,
+          tag,
+          avatarUrl,
+          bannerUrl,
+          email,
+          guildCount: profile.guildCount || 0,
+          banned,
+          lastLoginAtMs,
+          lastLoginAtWITA: loginLabels.wita,
+          lastLoginAtWIB: loginLabels.wib,
+          lastLoginAtLabel: loginLabels.label,
+          lastKeyExpiresAtMs: latestExpireMs || null,
+          lastKeyExpiresAtWITA: expireLabels.wita,
+          lastKeyExpiresAtWIB: expireLabels.wib,
+          lastKeyExpiresAtLabel: expireLabels.label,
+          summary,
+          keysAll,
+        });
+      } catch (err) {
+        console.error(
+          "[serverv2] build perUserData error for id=",
+          discordId,
+          err
+        );
+      }
+    }
+
+    const totalDiscordUsers = perUserData.length;
+
+    // Build userStats untuk tabel overview
+    let userStats = perUserData.map((d) => ({
+      discordId: d.discordId,
+      username: d.username,
+      globalName: d.globalName,
+      discriminator: d.discriminator,
+      tag: d.tag,
+      avatarUrl: d.avatarUrl,
+      guildCount: d.guildCount,
+      totalKeys: d.summary.total,
+      paidKeys: d.summary.paid,
+      freeKeys: d.summary.free,
+      activeKeys: d.summary.active,
+      lastLoginAtWITA: d.lastLoginAtWITA,
+      lastLoginAtWIB: d.lastLoginAtWIB,
+      lastLoginAtLabel: d.lastLoginAtLabel,
+      lastKeyExpiresAtWITA: d.lastKeyExpiresAtWITA,
+      lastKeyExpiresAtWIB: d.lastKeyExpiresAtWIB,
+      lastKeyExpiresAtLabel: d.lastKeyExpiresAtLabel,
+      banned: d.banned,
+    }));
+
+    // Filter search
+    if (query) {
+      const qLower = query.toLowerCase();
+      userStats = userStats.filter((row) => {
+        if (
+          row.discordId &&
+          String(row.discordId).toLowerCase().includes(qLower)
+        )
+          return true;
+        if (row.username && row.username.toLowerCase().includes(qLower))
+          return true;
+        if (row.globalName && row.globalName.toLowerCase().includes(qLower))
+          return true;
+        if (row.tag && row.tag.toLowerCase().includes(qLower)) return true;
+        return false;
+      });
+    }
+
+    // Filter status
+    let filteredIds = userStats.map((u) => u.discordId);
+    if (filter === "hasKeys") {
+      userStats = userStats.filter((u) => (u.totalKeys || 0) > 0);
+    } else if (filter === "noKeys") {
+      userStats = userStats.filter((u) => (u.totalKeys || 0) === 0);
+    } else if (filter === "banned") {
+      userStats = userStats.filter((u) => !!u.banned);
+    } else if (filter === "notBanned") {
+      userStats = userStats.filter((u) => !u.banned);
+    }
+    filteredIds = userStats.map((u) => u.discordId);
+
+    // Tentukan selectedUser
+    let selectedUserId = null;
+    if (selectedUserParam && filteredIds.includes(selectedUserParam)) {
+      selectedUserId = selectedUserParam;
+    } else if (!selectedUserParam && filteredIds.length > 0) {
+      selectedUserId = filteredIds[0];
+    }
+
+    let selectedUser = null;
+    let selectedUserSummary = null;
+    let selectedUserKeys = [];
+
+    if (selectedUserId) {
+      const data = perUserData.find((d) => d.discordId === selectedUserId);
+      if (data) {
+        selectedUser = {
+          discordId: data.discordId,
+          username: data.username,
+          globalName: data.globalName,
+          discriminator: data.discriminator,
+          tag: data.tag,
+          avatarUrl: data.avatarUrl,
+          bannerUrl: data.bannerUrl,
+          email: data.email,
+          guildCount: data.guildCount,
+          banned: data.banned,
+          lastLoginAtWITA: data.lastLoginAtWITA,
+          lastLoginAtWIB: data.lastLoginAtWIB,
+          lastLoginAtLabel: data.lastLoginAtLabel,
+        };
+        selectedUserSummary = data.summary;
+        selectedUserKeys = data.keysAll;
+      }
+    }
+
+    res.render("admin-dashboarddiscord", {
+      title: "Admin – Discord Key Manager",
+      totalDiscordUsers,
+      totalKeysCount,
+      totalPaidKeysCount,
+      totalFreeKeysCount,
+      activeKeysCount,
+      bannedUsersCount,
+      query,
+      filter,
+      userStats,
+      selectedUser,
+      selectedUserSummary,
+      selectedUserKeys,
+      freeKeyUiConfig,
+      freeKeyTtlHours,
+      paidPlanConfig,
+    });
+  });
+
+  // Simpan global config (UI Get Free Key + TTL)
+  app.post(
+    "/admin/discord/save-global-key-config",
+    requireAdmin,
+    async (req, res) => {
+      const body = req.body || {};
+
+      const heroSubtext = (body.heroSubtext || "").trim();
+      const bullet1 = (body.bullet1 || "").trim();
+      const bullet2 = (body.bullet2 || "").trim();
+      const validityLabel = (body.validityLabel || "").trim();
+      const workinkDescription = (body.workinkDescription || "").trim();
+      const linkvertiseDescription = (body.linkvertiseDescription || "").trim();
+
+      let freeKeyTtlHours = parseInt(body.freeKeyTtlHours, 10);
+      if (!Number.isFinite(freeKeyTtlHours) || freeKeyTtlHours <= 0) {
+        freeKeyTtlHours = FREE_KEY_TTL_DEFAULT_HOURS;
+      }
+      if (freeKeyTtlHours > 72) freeKeyTtlHours = 72;
+
+      let paidMonthDays = parseInt(body.paidMonthDays, 10);
+      if (!Number.isFinite(paidMonthDays) || paidMonthDays <= 0) {
+        paidMonthDays = PAID_MONTH_DEFAULT_DAYS;
+      }
+      if (paidMonthDays > 730) paidMonthDays = 730;
+
+      let paidLifetimeDays = parseInt(body.paidLifetimeDays, 10);
+      if (!Number.isFinite(paidLifetimeDays) || paidLifetimeDays <= 0) {
+        paidLifetimeDays = PAID_LIFETIME_DEFAULT_DAYS;
+      }
+      if (paidLifetimeDays > 3650) paidLifetimeDays = 3650;
+
+      const freeKeyUiConfig = {
+        ttlHours: freeKeyTtlHours,
+        freeKeyTtlHours,
+        global: {
+          dashboardCaption: heroSubtext,
+          heroSubtext,
+          bullet1,
+          bullet2,
+          validityLabel,
+        },
+        workink: {
+          dashboardDescription: workinkDescription,
+        },
+        linkvertise: {
+          dashboardDescription: linkvertiseDescription,
+        },
+      };
+
+      const paidPlanConfig = {
+        monthDays: paidMonthDays,
+        lifetimeDays: paidLifetimeDays,
+      };
+
+      try {
+        await Promise.all([
+          kvSetJson(FREE_KEY_UI_CONFIG_KEY, freeKeyUiConfig),
+          kvSetJson(PAID_PLAN_CONFIG_KEY, paidPlanConfig),
+        ]);
+
+        // update cache in-memory
+        cachedFreeKeyUiConfig = freeKeyUiConfig;
+        cachedPaidPlanConfig = paidPlanConfig;
+        cachedGlobalConfigLoadedAt = nowMs();
+      } catch (err) {
+        console.error(
+          "[serverv2] save-global-key-config error (masih pakai nilai lama jika gagal):",
+          err
+        );
+      }
+
+      res.redirect("/admin/discord");
+    }
+  );
+
+  // Ban user
+  app.post("/admin/discord/ban-user", requireAdmin, async (req, res) => {
+    const discordId = (req.body.discordId || "").trim();
+    if (!discordId) {
+      return res.redirect("/admin/discord");
+    }
+
+    try {
+      await setDiscordUserProfilePersistent(discordId, { banned: true });
+    } catch (err) {
+      console.error("[serverv2] ban-user error:", err);
+    }
+
+    res.redirect("/admin/discord?user=" + encodeURIComponent(discordId));
+  });
+
+  // Unban user
+  app.post("/admin/discord/unban-user", requireAdmin, async (req, res) => {
+    const discordId = (req.body.discordId || "").trim();
+    if (!discordId) {
+      return res.redirect("/admin/discord");
+    }
+
+    try {
+      await setDiscordUserProfilePersistent(discordId, { banned: false });
+    } catch (err) {
+      console.error("[serverv2] unban-user error:", err);
+    }
+
+    res.redirect("/admin/discord?user=" + encodeURIComponent(discordId));
+  });
+
+  // Delete semua key user
+  app.post(
+    "/admin/discord/delete-user-keys",
+    requireAdmin,
+    async (req, res) => {
+      const discordId = (req.body.discordId || "").trim();
+      if (!discordId) {
+        return res.redirect("/admin/discord");
+      }
+
+      try {
+        // Free keys
+        const freeIdxKey = userIndexKey(discordId);
+        const freeTokens = await kvGetJson(freeIdxKey);
+        if (Array.isArray(freeTokens)) {
+          for (const t of freeTokens) {
+            if (!t) continue;
+            try {
+              await deleteFreeKeyPersistent(t, discordId);
+            } catch (err) {
+              console.error(
+                "[serverv2] delete-user-keys free token error:",
+                t,
+                err
+              );
+            }
+          }
+          // kosongkan index (walaupun deleteFreeKeyPersistent sudah bersihkan)
+          await kvSetJson(freeIdxKey, []);
+        }
+
+        // Paid keys
+        const paidIdxKey = paidUserIndexKey(discordId);
+        const paidTokens = await kvGetJson(paidIdxKey);
+        if (Array.isArray(paidTokens)) {
+          for (const t of paidTokens) {
+            if (!t) continue;
+            try {
+              const rec = await getPaidKeyRecord(t);
+              if (!rec) continue;
+              await setPaidKeyRecord({
+                token: t,
+                createdAt: rec.createdAt,
+                byIp: rec.byIp,
+                expiresAfter: rec.expiresAfter,
+                type: rec.type,
+                valid: false,
+                deleted: true,
+                ownerDiscordId: discordId,
+              });
+            } catch (err) {
+              console.error(
+                "[serverv2] delete-user-keys paid token error:",
+                t,
+                err
+              );
+            }
+          }
+          await kvSetJson(paidIdxKey, []);
+        }
+      } catch (err) {
+        console.error("[serverv2] delete-user-keys error:", err);
+      }
+
+      res.redirect("/admin/discord?user=" + encodeURIComponent(discordId));
+    }
+  );
+
+  // Update 1 key (createdAt + time left TTL)
+  app.post("/admin/discord/update-key", requireAdmin, async (req, res) => {
+    const discordId = (req.body.discordId || "").trim();
+    const token = (req.body.token || "").trim();
+    const createdAtRaw = req.body.createdAt;
+    const expiresTTLRaw = req.body.expiresAt; // HH:MM:SS
+
+    if (!discordId || !token) {
+      return res.redirect("/admin/discord");
+    }
+
+    const redirectUrl =
+      "/admin/discord?user=" + encodeURIComponent(discordId);
+
+    try {
+      const now = nowMs();
+      const newCreatedMs = parseDateOrTimestamp(createdAtRaw);
+      const ttlMs = parseHHMMSS(expiresTTLRaw);
+      const newExpiresMs =
+        ttlMs && ttlMs > 0 ? now + ttlMs : null;
+
+      let paidRec = await getPaidKeyRecord(token);
+      let freeRec = null;
+      if (!paidRec) {
+        freeRec = await kvGetJson(tokenKey(token));
+      }
+
+      if (!paidRec && !freeRec) {
+        return res.redirect(redirectUrl);
+      }
+
+      if (paidRec) {
+        const updated = {
+          token,
+          createdAt: newCreatedMs || paidRec.createdAt || now,
+          byIp: paidRec.byIp,
+          expiresAfter:
+            newExpiresMs !== null
+              ? newExpiresMs
+              : paidRec.expiresAfter || 0,
+          type: paidRec.type,
+          valid: paidRec.valid,
+          deleted: paidRec.deleted,
+          ownerDiscordId: paidRec.ownerDiscordId || discordId,
+        };
+        await setPaidKeyRecord(updated);
+      } else if (freeRec) {
+        if (String(freeRec.userId) !== String(discordId)) {
+          console.warn(
+            "[serverv2] update-key: free key user mismatch, tetap update sebagai admin.",
+            token,
+            freeRec.userId,
+            discordId
+          );
+        }
+        if (newCreatedMs) {
+          freeRec.createdAt = newCreatedMs;
+        }
+        if (newExpiresMs !== null) {
+          freeRec.expiresAfter = newExpiresMs;
+        }
+        const expired = freeRec.expiresAfter <= now;
+        freeRec.deleted = freeRec.deleted || false;
+        freeRec.valid = !freeRec.deleted && !expired;
+        await kvSetJson(tokenKey(token), freeRec);
+      }
+    } catch (err) {
+      console.error("[serverv2] update-key error:", err);
+    }
+
+    res.redirect(redirectUrl);
+  });
+
+  // Renew 1 key (extend expiry)
+  app.post("/admin/discord/renew-key", requireAdmin, async (req, res) => {
+    const discordId = (req.body.discordId || "").trim();
+    const token = (req.body.token || "").trim();
+
+    if (!discordId || !token) {
+      return res.redirect("/admin/discord");
+    }
+
+    const redirectUrl =
+      "/admin/discord?user=" + encodeURIComponent(discordId);
+
+    try {
+      const now = nowMs();
+      let paidRec = await getPaidKeyRecord(token);
+      let freeRec = null;
+      if (!paidRec) {
+        freeRec = await kvGetJson(tokenKey(token));
+      }
+
+      if (!paidRec && !freeRec) {
+        return res.redirect(redirectUrl);
+      }
+
+      if (paidRec) {
+        const typeRaw = (paidRec.type || "").toLowerCase();
+        const { monthMs, lifetimeMs } = await getPaidDurationsMs();
+
+        let durationMs;
+        if (typeRaw === "month") {
+          durationMs = monthMs;
+        } else if (typeRaw === "lifetime") {
+          durationMs = lifetimeMs;
+        } else {
+          durationMs = monthMs;
+        }
+
+        const newExpires = now + durationMs;
+        await setPaidKeyRecord({
+          token,
+          createdAt: paidRec.createdAt || now,
+          byIp: paidRec.byIp,
+          expiresAfter: newExpires,
+          type: paidRec.type,
+          valid: true,
+          deleted: false,
+          ownerDiscordId: paidRec.ownerDiscordId || discordId,
+        });
+      } else if (freeRec) {
+        await extendFreeKeyPersistent(token);
+      }
+    } catch (err) {
+      console.error("[serverv2] renew-key error:", err);
+    }
+
+    res.redirect(redirectUrl);
+  });
+
+  // Delete 1 key (paid / free) untuk 1 user di admin-dashboarddiscord
+  app.post("/admin/discord/delete-key", requireAdmin, async (req, res) => {
+    const discordId = (req.body.discordId || "").trim();
+    const token = (req.body.token || "").trim();
+
+    if (!discordId || !token) {
+      return res.redirect("/admin/discord");
+    }
+
+    const redirectUrl =
+      "/admin/discord?user=" + encodeURIComponent(discordId);
+
+    try {
+      // 1) Paid key: tandai deleted + invalid + bersihkan index paid
+      let paidRec = await getPaidKeyRecord(token);
+      if (paidRec) {
+        await setPaidKeyRecord({
+          token,
+          createdAt: paidRec.createdAt,
+          byIp: paidRec.byIp,
+          expiresAfter: paidRec.expiresAfter,
+          type: paidRec.type,
+          valid: false,
+          deleted: true,
+          ownerDiscordId: paidRec.ownerDiscordId || discordId,
+        });
+
+        try {
+          const paidIdxKey = paidUserIndexKey(discordId);
+          const paidTokens = await kvGetJson(paidIdxKey);
+          if (Array.isArray(paidTokens)) {
+            const filteredPaid = paidTokens.filter((t) => t && t !== token);
+            await kvSetJson(paidIdxKey, filteredPaid);
+          }
+        } catch (err2) {
+          console.error(
+            "[serverv2] delete-key: cleanup paid index error:",
+            err2
+          );
+        }
+      }
+
+      // 2) Free key: delete + bersihkan index via deleteFreeKeyPersistent
+      const freeRec = await kvGetJson(tokenKey(token));
+      if (freeRec && String(freeRec.userId) === String(discordId)) {
+        await deleteFreeKeyPersistent(token, discordId);
+      }
+    } catch (err) {
+      console.error("[serverv2] delete-key error:", err);
+    }
+
+    res.redirect(redirectUrl);
+  });
+
+  // =========================
+  // ROUTES – DISCORD OAUTH2
+  // =========================
+
+  app.get("/auth/discord", (req, res) => {
+    const state = crypto.randomBytes(16).toString("hex");
+    if (req.session) {
+      req.session.oauthState = state;
+    }
+    const url = makeDiscordAuthUrl(state);
+    res.redirect(url);
+  });
+
+  app.get("/auth/discord/callback", async (req, res) => {
+    const { code, state, error } = req.query;
+
+    if (error) {
+      console.error("Discord OAuth error:", error);
+      return res.redirect("/discord-login?error=oauth");
+    }
+
+    if (!code) {
+      return res.redirect("/discord-login?error=nocode");
+    }
+
+    if (!req.session || !state || state !== req.session.oauthState) {
+      console.warn("[serverv2] Invalid OAuth state.");
+      return res.redirect("/discord-login?error=state");
+    }
+
+    req.session.oauthState = null;
+
+    try {
+      const tokenRes = await fetch("https://discord.com/api/oauth2/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: DISCORD_CLIENT_ID,
+          client_secret: DISCORD_CLIENT_SECRET,
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: DISCORD_REDIRECT_URI,
+        }),
+      });
+
+      const tokenText = await tokenRes.text();
+      if (!tokenRes.ok) {
+        console.error(
+          "[serverv2] Token error:",
+          tokenRes.status,
+          tokenText.slice(0, 200)
+        );
+        return res.redirect("/discord-login?error=token");
+      }
+
+      let tokenData;
+      try {
+        tokenData = JSON.parse(tokenText);
+      } catch {
+        console.error("[serverv2] Token JSON parse error:", tokenText);
+        return res.redirect("/discord-login?error=tokenjson");
+      }
+
+      const accessToken = tokenData.access_token;
+      if (!accessToken) {
+        console.error("[serverv2] access_token kosong.");
+        return res.redirect("/discord-login?error=tokenempty");
+      }
+
+      const userRes = await fetch("https://discord.com/api/users/@me", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      const userText = await userRes.text();
+      if (!userRes.ok) {
+        console.error(
+          "[serverv2] User error:",
+          userRes.status,
+          userText.slice(0, 200)
+        );
+        return res.redirect("/discord-login?error=user");
+      }
+
+      let user;
+      try {
+        user = JSON.parse(userText);
+      } catch {
+        console.error("[serverv2] User JSON parse error:", userText);
+        return res.redirect("/discord-login?error=userjson");
+      }
+
+      let guildCount = 0;
+      try {
+        const guildRes = await fetch(
+          "https://discord.com/api/users/@me/guilds",
+          {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          }
+        );
+        if (guildRes.ok) {
+          const guilds = await guildRes.json();
+          if (Array.isArray(guilds)) guildCount = guilds.length;
+        }
+      } catch {
+        // tidak fatal
+      }
+
+      const isOwner = isOwnerId(user.id); // hanya untuk badge, bukan login admin
+
+      req.session.discordUser = {
+        id: user.id,
+        username: user.username,
+        global_name: user.global_name || user.username,
+        discriminator: user.discriminator,
+        avatar: user.avatar,
+        email: user.email,
+        guildCount,
+        banner: user.banner || null,
+        isOwner,
+      };
+
+      if (hasFreeKeyKV) {
+        try {
+          await setDiscordUserProfilePersistent(user.id, {
+            id: user.id,
+            username: user.username,
+            global_name: user.global_name || user.username,
+            discriminator: user.discriminator,
+            avatar: user.avatar,
+            banner: user.banner || null,
+            email: user.email || null,
+            guildCount,
+            lastLoginAt: nowMs(),
+            isOwner,
+          });
+        } catch (e) {
+          console.warn("[serverv2] gagal simpan profil discord ke KV:", e);
+        }
+      }
+
+      res.redirect("/dashboard");
+    } catch (err) {
+      console.error("[serverv2] OAuth callback exception:", err);
+      res.redirect("/discord-login?error=exception");
+    }
+  });
+
+  app.post("/logout", (req, res) => {
+    if (req.session) {
+      req.session.discordUser = null;
+    }
+    res.redirect("/");
+  });
+
+  app.get("/logout", (req, res) => {
+    if (req.session) {
+      req.session.discordUser = null;
+    }
+    res.redirect("/");
+  });
+
+  console.log(
+    "[serverv2] Discord OAuth + Dashboard + GetFreeKey + FreeKey API + PaidKey API + PaidFree User-Info API + Admin Discord Dashboard routes mounted (admin via session)."
+  );
+};
