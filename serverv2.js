@@ -804,10 +804,6 @@ module.exports = function mountDiscordOAuth(app) {
   // =========================
   // HELPER SESSION ADMIN
   // =========================
-  // Admin login klasik via ADMIN_USER / ADMIN_PASS di server.js
-  // diasumsikan set salah satu flag berikut di session:
-  //   req.session.isAdmin === true
-  //   atau req.session.adminLoggedIn === true
   function isAdminSession(req) {
     return !!(
       req.session &&
@@ -821,16 +817,14 @@ module.exports = function mountDiscordOAuth(app) {
   app.use((req, res, next) => {
     const user = (req.session && req.session.discordUser) || null;
     res.locals.user = user;
-    // isOwner hanya untuk badge visual, tidak dipakai proteksi route
     res.locals.isOwner = user ? isOwnerId(user.id) : false;
     res.locals.ownerIds = OWNER_IDS;
-    // flag admin dari login ADMIN_USER / ADMIN_PASS (server.js)
     res.locals.isAdmin = isAdminSession(req);
     next();
   });
 
   // =========================
-  // HELPER AUTH
+  // HELPER AUTH & ADS PROVIDER RESOLVER
   // =========================
 
   function makeDiscordAuthUrl(state) {
@@ -844,6 +838,28 @@ module.exports = function mountDiscordOAuth(app) {
     });
 
     return `https://discord.com/oauth2/authorize?${params.toString()}`;
+  }
+
+  // Resolver ads provider (dipakai GET /getfreekey, POST generate, POST extend)
+  function resolveAdsProviderForRequest(req) {
+    const rawAdsParam =
+      typeof req.query.ads === "string" ? req.query.ads : "";
+
+    let adsProvider;
+    if (rawAdsParam) {
+      // Ada ?ads → pakai & simpan ke session
+      adsProvider = canonicalAdsProvider(rawAdsParam);
+      if (req.session) {
+        req.session.lastFreeKeyAdsProvider = adsProvider;
+      }
+    } else if (req.session && req.session.lastFreeKeyAdsProvider) {
+      // Tidak ada ?ads, pakai provider terakhir dari session
+      adsProvider = canonicalAdsProvider(req.session.lastFreeKeyAdsProvider);
+    } else {
+      // Default awal kalau belum ada riwayat
+      adsProvider = "workink";
+    }
+    return adsProvider;
   }
 
   // Wajib login Discord untuk fitur user (dashboard, get key, dll)
@@ -968,24 +984,8 @@ module.exports = function mountDiscordOAuth(app) {
 
     const doneFlag = String(req.query.done || "") === "1";
 
-    // Param ?ads=... bisa kosong ketika callback hanya ?done=1
-    const rawAdsParam =
-      typeof req.query.ads === "string" ? req.query.ads : "";
-
-    let adsProvider;
-    if (rawAdsParam) {
-      // Ada ?ads → pakai & simpan ke session
-      adsProvider = canonicalAdsProvider(rawAdsParam);
-      if (req.session) {
-        req.session.lastFreeKeyAdsProvider = adsProvider;
-      }
-    } else if (req.session && req.session.lastFreeKeyAdsProvider) {
-      // Tidak ada ?ads, pakai provider terakhir dari session
-      adsProvider = canonicalAdsProvider(req.session.lastFreeKeyAdsProvider);
-    } else {
-      // Default awal kalau belum ada riwayat
-      adsProvider = "workink";
-    }
+    // Gunakan resolver umum (query.ads + session.lastFreeKeyAdsProvider)
+    const adsProvider = resolveAdsProviderForRequest(req);
 
     if (doneFlag && req.session) {
       const existingState = getAdsState(req, adsProvider);
@@ -1054,8 +1054,9 @@ module.exports = function mountDiscordOAuth(app) {
   app.post("/getfreekey/generate", requireAuth, async (req, res) => {
     const discordUser = req.session.discordUser;
     const userId = discordUser.id;
-    const adsProvider = canonicalAdsProvider(req.query.ads || "workink");
 
+    // Provider di-resolve sama seperti GET /getfreekey
+    const adsProvider = resolveAdsProviderForRequest(req);
     const redirectBase = "/getfreekey?ads=" + encodeURIComponent(adsProvider);
 
     try {
@@ -1087,7 +1088,7 @@ module.exports = function mountDiscordOAuth(app) {
       const ip = String(ipHeader).split(",")[0].trim();
       await createFreeKeyRecordPersistent({
         userId,
-        provider: adsProvider,
+        provider: adsProvider, // 'workink' atau 'linkvertise'
         ip,
       });
 
@@ -1110,7 +1111,8 @@ module.exports = function mountDiscordOAuth(app) {
   app.post("/getfreekey/extend", requireAuth, async (req, res) => {
     const discordUser = req.session.discordUser;
     const userId = discordUser.id;
-    const adsProvider = canonicalAdsProvider(req.query.ads || "workink");
+
+    const adsProvider = resolveAdsProviderForRequest(req);
     const redirectBase = "/getfreekey?ads=" + encodeURIComponent(adsProvider);
 
     const token = req.body && req.body.token;
@@ -1526,7 +1528,6 @@ module.exports = function mountDiscordOAuth(app) {
 
   // =========================
   // ROUTES – ADMIN DISCORD DASHBOARD & MANAGEMENT
-  // Proteksi pakai requireAdmin (session ADMIN_USER / ADMIN_PASS)
   // =========================
   app.get("/admin/discord", requireAdmin, async (req, res) => {
     const query = (req.query.q || "").trim();
@@ -1921,7 +1922,6 @@ module.exports = function mountDiscordOAuth(app) {
         await setPaidKeyRecord(updated);
       } else if (freeRec) {
         if (String(freeRec.userId) !== String(discordId)) {
-          // bukan milik user ini -> tetap update tapi log
           console.warn(
             "[serverv2] update-key: free key user mismatch, tetap update sebagai admin.",
             token,
