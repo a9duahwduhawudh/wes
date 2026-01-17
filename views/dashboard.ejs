@@ -58,42 +58,6 @@
       var premiumKeys = (keyData && typeof keyData.premium !== 'undefined')
         ? keyData.premium
         : 0;
-
-      // =======================
-      // UI Config Get Free Key
-      // =======================
-      // Nanti akan diisi dari Admin Discord (disimpan di KV).
-      // Bentuk yang diharapkan:
-      // freeKeyUiConfig = {
-      //   global: {
-      //     dashboardCaption: '...',
-      //     validityLabel: '3h validity, easy renew when expired.'
-      //   },
-      //   workink: {
-      //     dashboardDescription: 'Complete Verification ... (Work.ink)'
-      //   },
-      //   linkvertise: {
-      //     dashboardDescription: 'Complete Verification ... (Linkvertise)'
-      //   }
-      // }
-      var freeCfg       = (typeof freeKeyUiConfig !== 'undefined' && freeKeyUiConfig) || {};
-      var globalFreeCfg = freeCfg.global || {};
-      var workinkCfg    = freeCfg.workink || {};
-      var linkvertiseCfg= freeCfg.linkvertise || {};
-
-      var globalCaption = globalFreeCfg.dashboardCaption ||
-        'Choose your preferred provider, complete a quick verification, and your free key will appear automatically.';
-
-      var validityLabel = globalFreeCfg.validityLabel ||
-        '3h validity, easy renew when expired.';
-
-      var workinkDesc = workinkCfg.dashboardDescription ||
-        workinkCfg.description ||
-        'Complete a short task and receive your ExHub free key instantly after verification.';
-
-      var linkvertiseDesc = linkvertiseCfg.dashboardDescription ||
-        linkvertiseCfg.description ||
-        'Use the Linkvertise route for alternative offers and stable delivery.';
     %>
 
     <!-- HERO / WELCOME + DISCORD PROFILE -->
@@ -233,25 +197,12 @@
             </p>
           <% } else { %>
             <p class="dash-section-caption">
-              <%= globalCaption %>
+              Choose your preferred provider, complete a quick verification, and your free key
+              will appear automatically.
             </p>
           <% } %>
         </div>
       </div>
-
-      <% if (isBannedAccount) { %>
-        <!-- Banner tengah ketika akun banned -->
-        <div class="dash-getfree-ban-banner"
-             style="margin:16px 0 18px 0;text-align:center;">
-          <div class="dash-getfree-ban-title" style="font-weight:600;">
-            Banned account — keys may be restricted
-          </div>
-          <div class="dash-getfree-ban-text" style="font-size:0.9rem;opacity:0.85;">
-            This Discord account cannot request new free keys via Work.ink or Linkvertise.
-            Any generated keys may be rejected by the bot.
-          </div>
-        </div>
-      <% } %>
 
       <div class="dash-getfree-grid">
         <!-- Work.ink -->
@@ -268,10 +219,7 @@
               <p class="getfree-label">Get Free Key</p>
               <h3 class="getfree-title">Work.ink</h3>
               <p class="getfree-desc">
-                <%= workinkDesc %>
-              </p>
-              <p class="getfree-meta">
-                <%= validityLabel %>
+                Complete a short task and receive your ExHub free key instantly after verification.
               </p>
             </div>
           </div>
@@ -299,10 +247,7 @@
               <p class="getfree-label">Get Free Key</p>
               <h3 class="getfree-title">Linkvertise</h3>
               <p class="getfree-desc">
-                <%= linkvertiseDesc %>
-              </p>
-              <p class="getfree-meta">
-                <%= validityLabel %>
+                Use the Linkvertise route for alternative offers and stable delivery.
               </p>
             </div>
           </div>
@@ -382,6 +327,8 @@
               var keyLabel = k.key || k.token || '';
 
               // --- Provider & Type Normalization ---
+              // Coba ambil provider dari beberapa field yang mungkin digunakan server:
+              // provider, providerLabel, source, adsProvider, ads, originAds, origin, freeSource, free_source
               var providerRaw =
                 k.provider ||
                 k.providerLabel ||
@@ -406,6 +353,7 @@
 
               var provLower = providerLbl.toLowerCase().trim();
 
+              // PRIORITAS: kalau string ada "linkvertise" → Linkvertise
               if (provLower.indexOf('linkvertise') !== -1 || provLower === 'lv') {
                 providerLbl = 'Linkvertise';
               } else if (
@@ -429,6 +377,7 @@
                 providerLbl = 'PAID LIFETIME';
                 isPaidKey = true;
               } else if (provLower.indexOf('exhub paid') !== -1) {
+                // ExHub paid lainnya
                 isPaidKey = true;
               }
 
@@ -468,6 +417,7 @@
 
               var expireAttr = expireTs ? String(expireTs) : '';
 
+              // Free key: hanya yang tier free + provider free
               var isFreeKey  =
                 (!isPaidKey) && (
                   tierLower === 'free' ||
@@ -627,6 +577,7 @@
       return n < 10 ? '0' + n : String(n);
     };
 
+    // Format HH:MM:SS supaya konsisten dengan backend
     return pad(h) + ':' + pad(m) + ':' + pad(s);
   }
 
@@ -643,13 +594,15 @@
 
       var timeLabel   = row.querySelector('.dash-key-time-label');
       var statusBadge = row.querySelector('.dash-key-status-badge');
-      var hasValid    = row.getAttribute('data-has-valid') === '1';
+      var hasValid    = row.getAttribute('data-has-valid') === '1'; // paid DB valid/expired
       var diff        = expireTs - now;
 
       if (timeLabel) {
         timeLabel.textContent = formatRemaining(diff);
       }
 
+      // Untuk key yang TIDAK punya flag valid/expired (free),
+      // kita update status otomatis Active/Expired.
       if (!hasValid) {
         if (diff <= 0) {
           row.setAttribute('data-status', 'Expired');
@@ -669,6 +622,7 @@
       }
     });
 
+    // setelah update status, refresh stats
     recomputeStats();
   }
 
@@ -678,6 +632,7 @@
   async function deleteKey(row, token, isFree) {
     if (!token) return;
 
+    // Paid key tidak boleh dihapus via dashboard
     if (!isFree) {
       alert('Paid keys tidak dapat dihapus dari dashboard. Hubungi admin jika perlu diblokir.');
       return;
@@ -698,17 +653,21 @@
       var json = null;
       try {
         json = await res.json();
-      } catch (e) {}
+      } catch (e) {
+        // ignore
+      }
 
       if (!res.ok || (json && json.ok === false)) {
         alert('Failed to delete key. Please try again later.');
         return;
       }
 
+      // Remove row dari DOM
       if (row && row.parentNode) {
         row.parentNode.removeChild(row);
       }
 
+      // refresh stats sesudah delete
       recomputeStats();
     } catch (err) {
       console.error('Delete key error:', err);
@@ -744,12 +703,14 @@
       }
 
       if (action === 'delete-key') {
+        // kalau button disabled, jangan apa-apa (paid key)
         if (btn.disabled) return;
         var isFree = btn.getAttribute('data-free') === '1';
         deleteKey(row, token, isFree);
       }
     });
 
+    // Search / filter
     var searchInput = document.getElementById('keys-search-input');
     if (searchInput) {
       searchInput.addEventListener('input', function () {
@@ -766,6 +727,9 @@
     }
   }
 
+  // =========================
+  // Init
+  // =========================
   document.addEventListener('DOMContentLoaded', function () {
     setupActions();
     recomputeStats();
