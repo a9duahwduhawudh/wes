@@ -175,8 +175,166 @@
         </form>
       </div>
 
-      <!-- ================= BODY (USER OVERVIEW + DETAIL) ================= -->
+      <!-- ================= BODY (CONFIG + USER OVERVIEW + DETAIL) ================= -->
       <main class="key-admin-main">
+
+        <% 
+          // ================================
+          // GLOBAL CONFIG (UI TEXT + TTL)
+          // Dibaca dari serverv2.js:
+          //  - freeKeyUiConfig
+          //  - keyPlanConfig
+          // ================================
+          var uiCfg   = (typeof freeKeyUiConfig !== 'undefined' && freeKeyUiConfig) || {};
+          var globCfg = uiCfg.global || {};
+          var wiCfg   = uiCfg.workink || {};
+          var lvCfg   = uiCfg.linkvertise || {};
+
+          var cfgDashboardCaption = globCfg.dashboardCaption || '';
+          var cfgValidityLabel    = globCfg.validityLabel || '';
+
+          var cfgWorkinkDesc = wiCfg.dashboardDescription || wiCfg.description || '';
+          var cfgLvDesc      = lvCfg.dashboardDescription || lvCfg.description || '';
+
+          var planCfg        = (typeof keyPlanConfig !== 'undefined' && keyPlanConfig) || {};
+          var freePlan       = planCfg.freeKey || planCfg.free || {};
+          var paidMonthPlan  = planCfg.paidMonth || {};
+          var paidLifePlan   = planCfg.paidLifetime || {};
+
+          var cfgFreeTtlHours     = (typeof freePlan.ttlHours !== 'undefined') ? freePlan.ttlHours : 3;
+          var cfgPaidMonthDays    = (typeof paidMonthPlan.ttlDays !== 'undefined') ? paidMonthPlan.ttlDays : 30;
+          var cfgPaidLifetimeDays = (typeof paidLifePlan.ttlDays !== 'undefined') ? paidLifePlan.ttlDays : 365;
+        %>
+
+        <!-- ========== GLOBAL KEY / UI CONFIG ========== -->
+        <section class="card admin-card-config" style="margin-bottom:18px;">
+          <div class="card-header">
+            <div class="card-header-main">
+              <h2 class="section-title small">Key System &amp; UI Config</h2>
+              <p class="card-description">
+                Atur teks UI <strong>"Complete Verification"</strong> dan masa berlaku
+                (<code>expiresAfter</code>) untuk <strong>free key</strong> (Work.ink / Linkvertise)
+                serta <strong>paid key</strong> (Month / Lifetime). Perubahan disimpan di
+                serverv2 + database dan bisa dipakai juga oleh bot Discord.
+              </p>
+            </div>
+          </div>
+
+          <form
+            action="/admin/discord/update-key-config"
+            method="POST"
+            class="admin-key-global-form"
+            autocomplete="off"
+          >
+            <div class="admin-key-global-grid">
+              <!-- KIRI: UI TEXT -->
+              <div class="admin-key-global-column">
+                <h3 class="section-title xsmall">UI Text — Get Free Key</h3>
+
+                <div class="admin-key-field">
+                  <div class="table-sub-text">Global caption (Dashboard / Get Free Key)</div>
+                  <input
+                    type="text"
+                    name="globalDashboardCaption"
+                    class="key-input"
+                    value="<%= cfgDashboardCaption %>"
+                    placeholder="Complete a quick verification to get your ExHub key and start using our scripts."
+                  />
+                </div>
+
+                <div class="admin-key-field">
+                  <div class="table-sub-text">
+                    Validity label (mis. <code>3h validity, easy renew when expired.</code>)
+                  </div>
+                  <input
+                    type="text"
+                    name="globalValidityLabel"
+                    class="key-input"
+                    value="<%= cfgValidityLabel %>"
+                    placeholder="3h validity, easy renew when expired."
+                  />
+                </div>
+
+                <div class="admin-key-field">
+                  <div class="table-sub-text">Work.ink description (card text)</div>
+                  <textarea
+                    name="workinkDescription"
+                    class="key-input"
+                    rows="2"
+                    placeholder="Complete a short task and receive your ExHub free key instantly after verification."
+                  ><%= cfgWorkinkDesc %></textarea>
+                </div>
+
+                <div class="admin-key-field">
+                  <div class="table-sub-text">Linkvertise description (card text)</div>
+                  <textarea
+                    name="linkvertiseDescription"
+                    class="key-input"
+                    rows="2"
+                    placeholder="Use the Linkvertise route for alternative offers and stable delivery."
+                  ><%= cfgLvDesc %></textarea>
+                </div>
+              </div>
+
+              <!-- KANAN: TTL / EXPIRES -->
+              <div class="admin-key-global-column">
+                <h3 class="section-title xsmall">Expires / TTL Config</h3>
+
+                <div class="admin-key-field">
+                  <div class="table-sub-text">Free key TTL (hours)</div>
+                  <input
+                    type="number"
+                    name="freeTtlHours"
+                    class="key-input"
+                    min="1"
+                    step="1"
+                    value="<%= cfgFreeTtlHours %>"
+                  />
+                  <div class="table-sub-text">
+                    Digunakan untuk Work.ink &amp; Linkvertise free key (contoh: <code>3</code> = 3 jam).
+                  </div>
+                </div>
+
+                <div class="admin-key-field">
+                  <div class="table-sub-text">Paid Month TTL (days)</div>
+                  <input
+                    type="number"
+                    name="paidMonthTtlDays"
+                    class="key-input"
+                    min="1"
+                    step="1"
+                    value="<%= cfgPaidMonthDays %>"
+                  />
+                  <div class="table-sub-text">
+                    Masa berlaku key berbayar <strong>Month</strong> dalam hari (contoh: <code>30</code> = 1 bulan).
+                  </div>
+                </div>
+
+                <div class="admin-key-field">
+                  <div class="table-sub-text">Paid Lifetime TTL (days, 0 = never expire)</div>
+                  <input
+                    type="number"
+                    name="paidLifetimeTtlDays"
+                    class="key-input"
+                    min="0"
+                    step="1"
+                    value="<%= cfgPaidLifetimeDays %>"
+                  />
+                  <div class="table-sub-text">
+                    Bisa <code>0</code> untuk benar-benar lifetime, atau angka besar (misal <code>3650</code> = 10 tahun).
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="admin-inline-actions" style="margin-top:12px;">
+              <button type="submit" class="key-btn key-btn-xs key-btn-primary">
+                Save Key Config
+              </button>
+            </div>
+          </form>
+        </section>
+
         <!-- ========== DISCORD USERS OVERVIEW (FULL WIDTH) ========== -->
         <section class="card admin-card-user-list">
           <div class="card-header">
@@ -288,20 +446,17 @@
                         <%
                           var banned = !!row.banned;
                           var totalKeys = row.totalKeys || 0;
-                          var activeKeys = row.activeKeys || 0;
+                          var activeKeysRow = row.activeKeys || 0;
                           var statusKeyLabel;
                           var statusKeyClass;
 
                           if (totalKeys === 0) {
-                            // Tidak punya key sama sekali
                             statusKeyLabel = 'No Keys';
                             statusKeyClass = 'status-pill status-pill--pending';
-                          } else if (activeKeys > 0) {
-                            // Ada minimal 1 key yang masih aktif
+                          } else if (activeKeysRow > 0) {
                             statusKeyLabel = 'Active';
                             statusKeyClass = 'status-pill status-pill--active';
                           } else {
-                            // Punya key, tapi semua sudah expired / deleted
                             statusKeyLabel = 'Expired';
                             statusKeyClass = 'status-pill status-pill--expired';
                           }
