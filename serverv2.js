@@ -169,172 +169,135 @@ function parseHHMMSS(value) {
 }
 
 // ---------------------------------------------------------
-// Konfigurasi Free Key & Key Plan (persisten via Upstash)
+// Global config (UI Get Free Key + TTL free & paid) via KV
+// ---------------------------------------------------------
+
+const FREE_KEY_UI_CONFIG_KEY = "exhub:freekey:ui-config";
+const PAID_PLAN_CONFIG_KEY = "exhub:paidplan:config";
+
+const FREE_KEY_TTL_DEFAULT_HOURS = Number(
+  process.env.FREE_KEY_TTL_HOURS || 3
+);
+const PAID_MONTH_DEFAULT_DAYS = Number(process.env.PAID_MONTH_DAYS || 30);
+const PAID_LIFETIME_DEFAULT_DAYS = Number(
+  process.env.PAID_LIFETIME_DAYS || 365
+);
+
+let cachedFreeKeyUiConfig = null;
+let cachedPaidPlanConfig = null;
+let cachedGlobalConfigLoadedAt = 0;
+const GLOBAL_CONFIG_CACHE_MS = 60 * 1000;
+
+function normalizeFreeKeyTtlHours(uiCfg) {
+  if (!uiCfg || typeof uiCfg !== "object") {
+    return FREE_KEY_TTL_DEFAULT_HOURS;
+  }
+
+  let raw =
+    uiCfg.ttlHours ??
+    uiCfg.freeKeyTtlHours ??
+    (uiCfg.global && uiCfg.global.ttlHours);
+
+  if (raw == null && uiCfg.global && typeof uiCfg.global.freeKeyTtlHours === "number") {
+    raw = uiCfg.global.freeKeyTtlHours;
+  }
+
+  let n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) n = FREE_KEY_TTL_DEFAULT_HOURS;
+  if (n > 72) n = 72; // batas aman
+  return n;
+}
+
+function normalizePaidPlanConfig(raw) {
+  const cfg = raw && typeof raw === "object" ? raw : {};
+  let monthDays = Number(cfg.monthDays);
+  let lifetimeDays = Number(cfg.lifetimeDays);
+
+  if (!Number.isFinite(monthDays) || monthDays <= 0) {
+    monthDays = PAID_MONTH_DEFAULT_DAYS;
+  }
+  if (!Number.isFinite(lifetimeDays) || lifetimeDays <= 0) {
+    lifetimeDays = PAID_LIFETIME_DEFAULT_DAYS;
+  }
+
+  return { monthDays, lifetimeDays };
+}
+
+async function loadGlobalKeyConfig() {
+  const now = nowMs();
+
+  if (
+    cachedGlobalConfigLoadedAt &&
+    now - cachedGlobalConfigLoadedAt < GLOBAL_CONFIG_CACHE_MS &&
+    cachedFreeKeyUiConfig !== null &&
+    cachedPaidPlanConfig !== null
+  ) {
+    const freeTtl = normalizeFreeKeyTtlHours(cachedFreeKeyUiConfig);
+    const paidCfg = normalizePaidPlanConfig(cachedPaidPlanConfig);
+    return {
+      freeKeyUiConfig: cachedFreeKeyUiConfig,
+      freeKeyTtlHours: freeTtl,
+      paidPlanConfig: paidCfg,
+    };
+  }
+
+  let uiCfgRaw = null;
+  let paidCfgRaw = null;
+
+  if (hasFreeKeyKV) {
+    try {
+      [uiCfgRaw, paidCfgRaw] = await Promise.all([
+        kvGetJson(FREE_KEY_UI_CONFIG_KEY),
+        kvGetJson(PAID_PLAN_CONFIG_KEY),
+      ]);
+    } catch (err) {
+      console.warn(
+        "[serverv2] loadGlobalKeyConfig KV error (gunakan default):",
+        err
+      );
+    }
+  }
+
+  cachedFreeKeyUiConfig = uiCfgRaw || {};
+  cachedPaidPlanConfig = paidCfgRaw || {};
+  cachedGlobalConfigLoadedAt = now;
+
+  const freeTtl = normalizeFreeKeyTtlHours(cachedFreeKeyUiConfig);
+  const paidCfg = normalizePaidPlanConfig(cachedPaidPlanConfig);
+
+  return {
+    freeKeyUiConfig: cachedFreeKeyUiConfig,
+    freeKeyTtlHours: freeTtl,
+    paidPlanConfig: paidCfg,
+  };
+}
+
+async function getFreeKeyTtlMs() {
+  const { freeKeyTtlHours } = await loadGlobalKeyConfig();
+  const ttlHours =
+    typeof freeKeyTtlHours === "number" && freeKeyTtlHours > 0
+      ? freeKeyTtlHours
+      : FREE_KEY_TTL_DEFAULT_HOURS;
+  return ttlHours * 60 * 60 * 1000;
+}
+
+async function getPaidDurationsMs() {
+  const { paidPlanConfig } = await loadGlobalKeyConfig();
+  const cfg = normalizePaidPlanConfig(paidPlanConfig);
+  const dayMs = 24 * 60 * 60 * 1000;
+  return {
+    monthMs: cfg.monthDays * dayMs,
+    lifetimeMs: cfg.lifetimeDays * dayMs,
+  };
+}
+
+// ---------------------------------------------------------
+// Konfigurasi Free Key (persisten via Upstash)
 // ---------------------------------------------------------
 
 const FREE_KEY_PREFIX = "EXHUBFREE";
-const FREE_KEY_TTL_DEFAULT_HOURS = 3;
+const FREE_KEY_TTL_HOURS = FREE_KEY_TTL_DEFAULT_HOURS; // default, bisa di-override via KV
 const FREE_KEY_MAX_PER_USER = 5;
-
-const FREEKEY_UI_CONFIG_KEY = "exhub:config:freekey-ui";
-const KEY_PLAN_CONFIG_KEY = "exhub:config:keyplans";
-
-const DEFAULT_FREEKEY_UI_CONFIG = {
-  global: {
-    dashboardCaption:
-      "Complete a quick verification to get your ExHub key and start using our scripts.",
-    validityLabel: "3h validity, easy renew when expired.",
-  },
-  workink: {
-    dashboardDescription:
-      "Complete a short task and receive your ExHub free key instantly after verification.",
-  },
-  linkvertise: {
-    dashboardDescription:
-      "Use the Linkvertise route for alternative offers and stable delivery.",
-  },
-};
-
-const DEFAULT_KEYPLAN_CONFIG = {
-  freeKey: { ttlHours: FREE_KEY_TTL_DEFAULT_HOURS },
-  paidMonth: { ttlDays: 30 },
-  paidLifetime: { ttlDays: 365 },
-};
-
-// helper UI config
-async function getFreeKeyUiConfigEffective() {
-  if (!hasFreeKeyKV) return DEFAULT_FREEKEY_UI_CONFIG;
-
-  try {
-    const raw = await kvGetJson(FREEKEY_UI_CONFIG_KEY);
-    if (!raw || typeof raw !== "object") {
-      return DEFAULT_FREEKEY_UI_CONFIG;
-    }
-
-    const cfg = {
-      global: {
-        ...DEFAULT_FREEKEY_UI_CONFIG.global,
-        ...(raw.global && typeof raw.global === "object" ? raw.global : {}),
-      },
-      workink: {
-        ...DEFAULT_FREEKEY_UI_CONFIG.workink,
-        ...(raw.workink && typeof raw.workink === "object"
-          ? raw.workink
-          : {}),
-      },
-      linkvertise: {
-        ...DEFAULT_FREEKEY_UI_CONFIG.linkvertise,
-        ...(raw.linkvertise && typeof raw.linkvertise === "object"
-          ? raw.linkvertise
-          : {}),
-      },
-    };
-    return cfg;
-  } catch (err) {
-    console.error("[serverv2] getFreeKeyUiConfig error:", err);
-    return DEFAULT_FREEKEY_UI_CONFIG;
-  }
-}
-
-async function setFreeKeyUiConfig(value) {
-  if (!hasFreeKeyKV) return;
-  await kvSetJson(FREEKEY_UI_CONFIG_KEY, value);
-}
-
-// helper key plan config (TTL)
-async function getKeyPlanConfigEffective() {
-  if (!hasFreeKeyKV) return DEFAULT_KEYPLAN_CONFIG;
-
-  try {
-    const raw = await kvGetJson(KEY_PLAN_CONFIG_KEY);
-    if (!raw || typeof raw !== "object") {
-      return DEFAULT_KEYPLAN_CONFIG;
-    }
-
-    const cfg = {
-      freeKey: { ...DEFAULT_KEYPLAN_CONFIG.freeKey },
-      paidMonth: { ...DEFAULT_KEYPLAN_CONFIG.paidMonth },
-      paidLifetime: { ...DEFAULT_KEYPLAN_CONFIG.paidLifetime },
-    };
-
-    if (raw.freeKey && typeof raw.freeKey === "object") {
-      const h = Number(raw.freeKey.ttlHours);
-      if (Number.isFinite(h) && h > 0) {
-        cfg.freeKey.ttlHours = h;
-      }
-    }
-
-    if (raw.paidMonth && typeof raw.paidMonth === "object") {
-      const d = Number(raw.paidMonth.ttlDays);
-      if (Number.isFinite(d) && d > 0) {
-        cfg.paidMonth.ttlDays = d;
-      }
-    }
-
-    if (raw.paidLifetime && typeof raw.paidLifetime === "object") {
-      const d = Number(raw.paidLifetime.ttlDays);
-      // boleh 0 = lifetime (no-expire)
-      if (Number.isFinite(d) && d >= 0) {
-        cfg.paidLifetime.ttlDays = d;
-      }
-    }
-
-    return cfg;
-  } catch (err) {
-    console.error("[serverv2] getKeyPlanConfig error:", err);
-    return DEFAULT_KEYPLAN_CONFIG;
-  }
-}
-
-async function setKeyPlanConfig(value) {
-  if (!hasFreeKeyKV) return;
-  await kvSetJson(KEY_PLAN_CONFIG_KEY, value);
-}
-
-// TTL free key → ms (menggunakan config)
-async function computeFreeKeyTtlMs() {
-  const plan = await getKeyPlanConfigEffective();
-  const hours = Number(plan.freeKey && plan.freeKey.ttlHours);
-  const h =
-    Number.isFinite(hours) && hours > 0
-      ? hours
-      : FREE_KEY_TTL_DEFAULT_HOURS;
-  return h * 60 * 60 * 1000;
-}
-
-// TTL renew paid key (month / lifetime) → ms
-async function computePaidRenewDurationMs(typeRaw) {
-  const plan = await getKeyPlanConfigEffective();
-  const lower = (typeRaw || "").toLowerCase();
-
-  const dayToMs = (d) => d * 24 * 60 * 60 * 1000;
-
-  if (lower === "lifetime") {
-    const d = Number(plan.paidLifetime && plan.paidLifetime.ttlDays);
-    if (!Number.isFinite(d)) {
-      return dayToMs(DEFAULT_KEYPLAN_CONFIG.paidLifetime.ttlDays);
-    }
-    if (d === 0) {
-      // 0 = lifetime no-expire → representasikan sebagai 0 ms (nanti expiresAfter=0)
-      return 0;
-    }
-    if (d < 0) {
-      return dayToMs(DEFAULT_KEYPLAN_CONFIG.paidLifetime.ttlDays);
-    }
-    return dayToMs(d);
-  }
-
-  // default / month
-  const d = Number(plan.paidMonth && plan.paidMonth.ttlDays);
-  if (!Number.isFinite(d) || d <= 0) {
-    return dayToMs(DEFAULT_KEYPLAN_CONFIG.paidMonth.ttlDays);
-  }
-  return dayToMs(d);
-}
-
-// ---------------------------------------------------------
-// Konfigurasi Free Key tambahan
-// ---------------------------------------------------------
 
 const REQUIRE_FREEKEY_ADS_CHECKPOINT =
   String(process.env.REQUIREFREEKEY_ADS_CHECKPOINT || "1") === "1";
@@ -374,7 +337,7 @@ function generateFreeKeyToken() {
 
 async function createFreeKeyRecordPersistent({ userId, provider, ip }) {
   const createdAt = nowMs();
-  const ttlMs = await computeFreeKeyTtlMs();
+  const ttlMs = await getFreeKeyTtlMs();
   const expiresAfter = createdAt + ttlMs;
 
   let token;
@@ -414,8 +377,8 @@ async function extendFreeKeyPersistent(token) {
   const rec = await kvGetJson(key);
   if (!rec) return null;
 
+  const ttlMs = await getFreeKeyTtlMs();
   const now = nowMs();
-  const ttlMs = await computeFreeKeyTtlMs();
 
   rec.expiresAfter = now + ttlMs;
   rec.valid = true;
@@ -624,7 +587,7 @@ async function getPaidKeysForUserPersistent(discordId) {
     const now = nowMs();
     const expired =
       rec.expiresAfter && typeof rec.expiresAfter === "number"
-        ? now > rec.expiresAfter && rec.expiresAfter !== 0
+        ? now > rec.expiresAfter
         : false;
     const deleted = !!rec.deleted;
 
@@ -644,10 +607,9 @@ async function getPaidKeysForUserPersistent(discordId) {
     else statusLabel = "Pending";
 
     const expiresAtMs = rec.expiresAfter || null;
-    const timeLeftLabel =
-      expiresAtMs && expiresAtMs !== 0
-        ? formatTimeLeftLabelFromMs(expiresAtMs)
-        : "-";
+    const timeLeftLabel = expiresAtMs
+      ? formatTimeLeftLabelFromMs(expiresAtMs)
+      : "-";
 
     result.push({
       key: rec.token,
@@ -718,6 +680,17 @@ async function setDiscordUserProfilePersistent(discordId, partial) {
   return merged;
 }
 
+async function isDiscordUserBanned(discordId) {
+  if (!hasFreeKeyKV) return false;
+  try {
+    const profile = await getDiscordUserProfile(discordId);
+    return !!(profile && profile.banned === true);
+  } catch (err) {
+    console.warn("[serverv2] isDiscordUserBanned error:", err);
+    return false;
+  }
+}
+
 function makeDiscordAvatarUrl(profile) {
   if (!profile) return null;
   const id = profile.id || profile.discordId;
@@ -771,7 +744,7 @@ function normalizePaidKeyForAdmin(k, fallbackDiscordId) {
     typeof k.expired === "boolean"
       ? k.expired
       : expiresAtMs
-      ? nowMs() > expiresAtMs && expiresAtMs !== 0
+      ? nowMs() > expiresAtMs
       : false;
   const valid =
     typeof k.valid === "boolean"
@@ -788,10 +761,9 @@ function normalizePaidKeyForAdmin(k, fallbackDiscordId) {
 
   const tier = k.tier || "Paid";
   const type = k.type || tier || "paid";
-  const timeLeftLabel =
-    expiresAtMs && expiresAtMs !== 0
-      ? formatTimeLeftLabelFromMs(expiresAtMs)
-      : "-";
+  const timeLeftLabel = expiresAtMs
+    ? formatTimeLeftLabelFromMs(expiresAtMs)
+    : "-";
 
   const provider = k.provider || "ExHub Paid";
 
@@ -1055,7 +1027,7 @@ module.exports = function mountDiscordOAuth(app) {
     let bannedFlag = false;
 
     try {
-      const profile = await getDiscordUserProfile(discordUser.id);
+      const profile = await kvGetJson(discordUserProfileKey(discordUser.id));
       if (profile && profile.banned === true) bannedFlag = true;
     } catch (err) {
       console.warn("[serverv2] read discord profile for banned error:", err);
@@ -1128,13 +1100,8 @@ module.exports = function mountDiscordOAuth(app) {
 
   app.get("/dashboard", requireAuth, async (req, res) => {
     const discordUser = req.session.discordUser;
-    const [keyData, freeKeyUiConfig, keyPlanConfig] = await Promise.all([
-      getUserKeys(discordUser),
-      getFreeKeyUiConfigEffective(),
-      getKeyPlanConfigEffective(),
-    ]);
-
-    res.render("dashboard", { keyData, freeKeyUiConfig, keyPlanConfig });
+    const keyData = await getUserKeys(discordUser);
+    res.render("dashboard", { keyData });
   });
 
   app.get("/get-keyfree", requireAuth, (req, res) => {
@@ -1150,6 +1117,12 @@ module.exports = function mountDiscordOAuth(app) {
     const userId = discordUser.id;
 
     const doneFlag = String(req.query.done || "") === "1";
+
+    // Global config (UI + TTL)
+    const { freeKeyUiConfig, freeKeyTtlHours } = await loadGlobalKeyConfig();
+
+    // Cek banned
+    const bannedFlag = await isDiscordUserBanned(userId);
 
     // Gunakan resolver umum (query.ads + session.lastFreeKeyAdsProvider)
     const adsProvider = resolveAdsProviderForRequest(req);
@@ -1180,42 +1153,26 @@ module.exports = function mountDiscordOAuth(app) {
     const adsUrl =
       adsProvider === "linkvertise" ? LINKVERTISE_ADS_URL : WORKINK_ADS_URL;
 
-    const [freeKeys, freeKeyUiConfig, keyPlanConfig, profile] =
-      await Promise.all([
-        getFreeKeysForUserPersistent(userId),
-        getFreeKeyUiConfigEffective(),
-        getKeyPlanConfigEffective(),
-        getDiscordUserProfile(userId),
-      ]);
-
-    const isBannedAccount = !!(profile && profile.banned === true);
-
+    const freeKeys = await getFreeKeysForUserPersistent(userId);
     const maxKeys = FREE_KEY_MAX_PER_USER;
     const keys = freeKeys;
 
     const capacityOk = keys.length < maxKeys;
 
-    const baseAllowGenerate =
+    let allowGenerate =
       capacityOk &&
       (!REQUIRE_FREEKEY_ADS_CHECKPOINT || (adsProgressDone && !adsUsed));
-
-    const baseCanRenew =
+    let canRenew =
       keys.length > 0 &&
       (!REQUIRE_FREEKEY_ADS_CHECKPOINT || (adsProgressDone && !adsUsed));
 
-    const allowGenerate = baseAllowGenerate && !isBannedAccount;
-    const canRenew = baseCanRenew && !isBannedAccount;
+    // Jika banned → tidak boleh generate / renew
+    if (bannedFlag) {
+      allowGenerate = false;
+      canRenew = false;
+    }
 
     const errorMessage = req.query.error || null;
-
-    const freeTtl =
-      keyPlanConfig && keyPlanConfig.freeKey
-        ? Number(keyPlanConfig.freeKey.ttlHours)
-        : FREE_KEY_TTL_DEFAULT_HOURS;
-    const defaultKeyHours =
-      Number.isFinite(freeTtl) && freeTtl > 0
-        ? freeTtl
-        : FREE_KEY_TTL_DEFAULT_HOURS;
 
     res.render("getfreekey", {
       title: "ExHub — Get Free Key",
@@ -1224,7 +1181,10 @@ module.exports = function mountDiscordOAuth(app) {
       adsUrl,
       keys,
       maxKeys,
-      defaultKeyHours,
+      defaultKeyHours:
+        typeof freeKeyTtlHours === "number" && freeKeyTtlHours > 0
+          ? freeKeyTtlHours
+          : FREE_KEY_TTL_HOURS,
       allowGenerate,
       canRenew,
       adsProgressDone,
@@ -1233,9 +1193,9 @@ module.exports = function mountDiscordOAuth(app) {
       keyAction: "/getfreekey/generate",
       renewAction: "/getfreekey/extend",
       errorMessage,
-      isBannedAccount,
+      banned: bannedFlag,
       freeKeyUiConfig,
-      keyPlanConfig,
+      freeKeyTtlHours,
     });
   });
 
@@ -1250,26 +1210,19 @@ module.exports = function mountDiscordOAuth(app) {
     const adsProvider = resolveAdsProviderForRequest(req);
     const redirectBase = "/getfreekey?ads=" + encodeURIComponent(adsProvider);
 
-    try {
-      // blokir banned
-      try {
-        const profile = await getDiscordUserProfile(userId);
-        if (profile && profile.banned === true) {
-          return res.redirect(
-            redirectBase +
-              "&error=" +
-              encodeURIComponent(
-                "This Discord account is banned. Free keys are restricted."
-              )
-          );
-        }
-      } catch (errProfile) {
-        console.warn(
-          "[serverv2] generate free key banned-check error:",
-          errProfile
-        );
-      }
+    // Cek banned
+    const bannedFlag = await isDiscordUserBanned(userId);
+    if (bannedFlag) {
+      return res.redirect(
+        redirectBase +
+          "&error=" +
+          encodeURIComponent(
+            "Akun ini telah diblokir. Free key tidak tersedia."
+          )
+      );
+    }
 
+    try {
       const existing = await getFreeKeysForUserPersistent(userId);
       if (existing.length >= FREE_KEY_MAX_PER_USER) {
         return res.redirect(
@@ -1335,26 +1288,19 @@ module.exports = function mountDiscordOAuth(app) {
       );
     }
 
-    try {
-      // blokir banned
-      try {
-        const profile = await getDiscordUserProfile(userId);
-        if (profile && profile.banned === true) {
-          return res.redirect(
-            redirectBase +
-              "&error=" +
-              encodeURIComponent(
-                "This Discord account is banned. Free keys are restricted."
-              )
-          );
-        }
-      } catch (errProfile) {
-        console.warn(
-          "[serverv2] extend free key banned-check error:",
-          errProfile
-        );
-      }
+    // Cek banned
+    const bannedFlag = await isDiscordUserBanned(userId);
+    if (bannedFlag) {
+      return res.redirect(
+        redirectBase +
+          "&error=" +
+          encodeURIComponent(
+            "Akun ini telah diblokir. Free key tidak dapat diperpanjang."
+          )
+      );
+    }
 
+    try {
       const rec = await kvGetJson(tokenKey(token));
       if (!rec || String(rec.userId) !== String(userId)) {
         return res.redirect(
@@ -1543,7 +1489,7 @@ module.exports = function mountDiscordOAuth(app) {
 
       const expired =
         rec.expiresAfter && typeof rec.expiresAfter === "number"
-          ? now > rec.expiresAfter && rec.expiresAfter !== 0
+          ? now > rec.expiresAfter
           : false;
       const deleted = !!rec.deleted;
       const valid = !!rec.valid && !deleted && !expired;
@@ -1656,7 +1602,7 @@ module.exports = function mountDiscordOAuth(app) {
           typeof k.expired === "boolean"
             ? k.expired
             : expiresAfter
-            ? now > expiresAfter && expiresAfter !== 0
+            ? now > expiresAfter
             : false;
 
         return {
@@ -1748,29 +1694,6 @@ module.exports = function mountDiscordOAuth(app) {
   });
 
   // --------------------------------------------------
-  // API: Key config untuk bot / panel lain
-  // --------------------------------------------------
-  app.get("/api/key-config", async (req, res) => {
-    try {
-      const [freeKeyUiConfig, keyPlanConfig] = await Promise.all([
-        getFreeKeyUiConfigEffective(),
-        getKeyPlanConfigEffective(),
-      ]);
-      res.json({
-        ok: true,
-        freeKeyUiConfig,
-        keyPlanConfig,
-      });
-    } catch (err) {
-      console.error("[serverv2] /api/key-config error:", err);
-      res.status(500).json({
-        ok: false,
-        error: "INTERNAL_ERROR",
-      });
-    }
-  });
-
-  // --------------------------------------------------
   // API kecil: GET /api/discord/owners
   // (hanya info, tidak dipakai untuk login admin)
   // --------------------------------------------------
@@ -1788,781 +1711,13 @@ module.exports = function mountDiscordOAuth(app) {
       ? String(req.query.user)
       : null;
 
-    const freeKeyUiConfig = await getFreeKeyUiConfigEffective();
-    const keyPlanConfig = await getKeyPlanConfigEffective();
+    const {
+      freeKeyUiConfig,
+      freeKeyTtlHours,
+      paidPlanConfig,
+    } = await loadGlobalKeyConfig();
 
     if (!hasFreeKeyKV) {
       return res.render("admin-dashboarddiscord", {
         title: "Admin – Discord Key Manager",
         totalDiscordUsers: 0,
-        totalKeysCount: 0,
-        totalPaidKeysCount: 0,
-        totalFreeKeysCount: 0,
-        activeKeysCount: 0,
-        bannedUsersCount: 0,
-        query,
-        filter,
-        userStats: [],
-        selectedUser: null,
-        selectedUserSummary: null,
-        selectedUserKeys: [],
-        freeKeyUiConfig,
-        keyPlanConfig,
-      });
-    }
-
-    let discordIds = [];
-    try {
-      discordIds = await getAllDiscordUserIds();
-    } catch (err) {
-      console.error("[serverv2] getAllDiscordUserIds error:", err);
-      discordIds = [];
-    }
-
-    const perUserData = [];
-    let totalKeysCount = 0;
-    let totalPaidKeysCount = 0;
-    let totalFreeKeysCount = 0;
-    let activeKeysCount = 0;
-    let bannedUsersCount = 0;
-
-    for (const discordId of discordIds) {
-      try {
-        const [profileRaw, paidKeysRaw, freeKeysRaw] = await Promise.all([
-          getDiscordUserProfile(discordId),
-          getPaidKeysForUserPersistent(discordId),
-          getFreeKeysForUserPersistent(discordId),
-        ]);
-
-        if (
-          !profileRaw &&
-          (!paidKeysRaw || paidKeysRaw.length === 0) &&
-          (!freeKeysRaw || freeKeysRaw.length === 0)
-        ) {
-          continue;
-        }
-
-        const profile = profileRaw || { id: discordId };
-        const normalizedPaid = (paidKeysRaw || [])
-          .map((k) => normalizePaidKeyForAdmin(k, discordId))
-          .filter(Boolean);
-        const normalizedFree = (freeKeysRaw || [])
-          .map((fk) => normalizeFreeKeyForAdmin(fk, discordId))
-          .filter(Boolean);
-
-        const keysAll = normalizedPaid.concat(normalizedFree);
-
-        const summary = {
-          total: keysAll.length,
-          paid: normalizedPaid.length,
-          free: normalizedFree.length,
-          active: keysAll.filter((k) => k.status === "Active").length,
-        };
-
-        const lastLoginAtMs =
-          typeof profile.lastLoginAt === "number"
-            ? profile.lastLoginAt
-            : null;
-        const loginLabels = lastLoginAtMs
-          ? formatDualTimeLabelMs(lastLoginAtMs)
-          : { wita: null, wib: null, label: null };
-
-        const latestExpireMs = keysAll.reduce((max, k) => {
-          if (!k.expiresAtMs || typeof k.expiresAtMs !== "number")
-            return max;
-          return k.expiresAtMs > max ? k.expiresAtMs : max;
-        }, 0);
-
-        const expireLabels = latestExpireMs
-          ? formatDualTimeLabelMs(latestExpireMs)
-          : { wita: null, wib: null, label: null };
-
-        const banned = !!profile.banned;
-
-        if (banned) bannedUsersCount++;
-        totalKeysCount += summary.total;
-        totalPaidKeysCount += summary.paid;
-        totalFreeKeysCount += summary.free;
-        activeKeysCount += summary.active;
-
-        const username = profile.username || "Unknown";
-        const globalName = profile.global_name || username;
-        const discriminator = profile.discriminator || "0000";
-        const tag = `${username}#${discriminator}`;
-        const avatarUrl = makeDiscordAvatarUrl(profile);
-        const bannerUrl = makeDiscordBannerUrl(profile);
-        const email = profile.email || null;
-
-        perUserData.push({
-          discordId,
-          username,
-          globalName,
-          discriminator,
-          tag,
-          avatarUrl,
-          bannerUrl,
-          email,
-          guildCount: profile.guildCount || 0,
-          banned,
-          lastLoginAtMs,
-          lastLoginAtWITA: loginLabels.wita,
-          lastLoginAtWIB: loginLabels.wib,
-          lastLoginAtLabel: loginLabels.label,
-          lastKeyExpiresAtMs: latestExpireMs || null,
-          lastKeyExpiresAtWITA: expireLabels.wita,
-          lastKeyExpiresAtWIB: expireLabels.wib,
-          lastKeyExpiresAtLabel: expireLabels.label,
-          summary,
-          keysAll,
-        });
-      } catch (err) {
-        console.error(
-          "[serverv2] build perUserData error for id=",
-          discordId,
-          err
-        );
-      }
-    }
-
-    const totalDiscordUsers = perUserData.length;
-
-    // Build userStats untuk tabel overview
-    let userStats = perUserData.map((d) => ({
-      discordId: d.discordId,
-      username: d.username,
-      globalName: d.globalName,
-      discriminator: d.discriminator,
-      tag: d.tag,
-      avatarUrl: d.avatarUrl,
-      guildCount: d.guildCount,
-      totalKeys: d.summary.total,
-      paidKeys: d.summary.paid,
-      freeKeys: d.summary.free,
-      activeKeys: d.summary.active,
-      lastLoginAtWITA: d.lastLoginAtWITA,
-      lastLoginAtWIB: d.lastLoginAtWIB,
-      lastLoginAtLabel: d.lastLoginAtLabel,
-      lastKeyExpiresAtWITA: d.lastKeyExpiresAtWITA,
-      lastKeyExpiresAtWIB: d.lastKeyExpiresAtWIB,
-      lastKeyExpiresAtLabel: d.lastKeyExpiresAtLabel,
-      banned: d.banned,
-    }));
-
-    // Filter search
-    if (query) {
-      const qLower = query.toLowerCase();
-      userStats = userStats.filter((row) => {
-        if (
-          row.discordId &&
-          String(row.discordId).toLowerCase().includes(qLower)
-        )
-          return true;
-        if (row.username && row.username.toLowerCase().includes(qLower))
-          return true;
-        if (row.globalName && row.globalName.toLowerCase().includes(qLower))
-          return true;
-        if (row.tag && row.tag.toLowerCase().includes(qLower)) return true;
-        return false;
-      });
-    }
-
-    // Filter status
-    let filteredIds = userStats.map((u) => u.discordId);
-    if (filter === "hasKeys") {
-      userStats = userStats.filter((u) => (u.totalKeys || 0) > 0);
-    } else if (filter === "noKeys") {
-      userStats = userStats.filter((u) => (u.totalKeys || 0) === 0);
-    } else if (filter === "banned") {
-      userStats = userStats.filter((u) => !!u.banned);
-    } else if (filter === "notBanned") {
-      userStats = userStats.filter((u) => !u.banned);
-    }
-    filteredIds = userStats.map((u) => u.discordId);
-
-    // Tentukan selectedUser
-    let selectedUserId = null;
-    if (selectedUserParam && filteredIds.includes(selectedUserParam)) {
-      selectedUserId = selectedUserParam;
-    } else if (!selectedUserParam && filteredIds.length > 0) {
-      selectedUserId = filteredIds[0];
-    }
-
-    let selectedUser = null;
-    let selectedUserSummary = null;
-    let selectedUserKeys = [];
-
-    if (selectedUserId) {
-      const data = perUserData.find((d) => d.discordId === selectedUserId);
-      if (data) {
-        selectedUser = {
-          discordId: data.discordId,
-          username: data.username,
-          globalName: data.globalName,
-          discriminator: data.discriminator,
-          tag: data.tag,
-          avatarUrl: data.avatarUrl,
-          bannerUrl: data.bannerUrl,
-          email: data.email,
-          guildCount: data.guildCount,
-          banned: data.banned,
-          lastLoginAtWITA: data.lastLoginAtWITA,
-          lastLoginAtWIB: data.lastLoginAtWIB,
-          lastLoginAtLabel: data.lastLoginAtLabel,
-        };
-        selectedUserSummary = data.summary;
-        selectedUserKeys = data.keysAll;
-      }
-    }
-
-    res.render("admin-dashboarddiscord", {
-      title: "Admin – Discord Key Manager",
-      totalDiscordUsers,
-      totalKeysCount,
-      totalPaidKeysCount,
-      totalFreeKeysCount,
-      activeKeysCount,
-      bannedUsersCount,
-      query,
-      filter,
-      userStats,
-      selectedUser,
-      selectedUserSummary,
-      selectedUserKeys,
-      freeKeyUiConfig,
-      keyPlanConfig,
-    });
-  });
-
-  // Update konfigurasi UI + TTL key (form global di admin-dashboarddiscord)
-  app.post(
-    "/admin/discord/update-key-config",
-    requireAdmin,
-    async (req, res) => {
-      if (!hasFreeKeyKV) {
-        return res.redirect("/admin/discord");
-      }
-
-      const body = req.body || {};
-
-      const dashboardCaption = (body.globalDashboardCaption || "")
-        .toString()
-        .trim();
-      const validityLabel = (body.globalValidityLabel || "")
-        .toString()
-        .trim();
-
-      const workinkDescription = (body.workinkDescription || "")
-        .toString()
-        .trim();
-      const linkvertiseDescription = (body.linkvertiseDescription || "")
-        .toString()
-        .trim();
-
-      const freeTtlHoursRaw = body.freeTtlHours;
-      const paidMonthTtlDaysRaw = body.paidMonthTtlDays;
-      const paidLifetimeTtlDaysRaw = body.paidLifetimeTtlDays;
-
-      let freeTtlHours =
-        parseInt(freeTtlHoursRaw, 10) || FREE_KEY_TTL_DEFAULT_HOURS;
-      if (!Number.isFinite(freeTtlHours) || freeTtlHours <= 0) {
-        freeTtlHours = FREE_KEY_TTL_DEFAULT_HOURS;
-      }
-
-      let paidMonthTtlDays =
-        parseInt(paidMonthTtlDaysRaw, 10) ||
-        DEFAULT_KEYPLAN_CONFIG.paidMonth.ttlDays;
-      if (!Number.isFinite(paidMonthTtlDays) || paidMonthTtlDays <= 0) {
-        paidMonthTtlDays = DEFAULT_KEYPLAN_CONFIG.paidMonth.ttlDays;
-      }
-
-      let paidLifetimeTtlDays =
-        paidLifetimeTtlDaysRaw !== undefined &&
-        paidLifetimeTtlDaysRaw !== null &&
-        paidLifetimeTtlDaysRaw !== ""
-          ? parseInt(paidLifetimeTtlDaysRaw, 10)
-          : DEFAULT_KEYPLAN_CONFIG.paidLifetime.ttlDays;
-      if (!Number.isFinite(paidLifetimeTtlDays)) {
-        paidLifetimeTtlDays = DEFAULT_KEYPLAN_CONFIG.paidLifetime.ttlDays;
-      }
-      if (paidLifetimeTtlDays < 0) {
-        paidLifetimeTtlDays = DEFAULT_KEYPLAN_CONFIG.paidLifetime.ttlDays;
-      }
-
-      const uiConfig = {
-        global: {
-          dashboardCaption,
-          validityLabel,
-        },
-        workink: {
-          dashboardDescription: workinkDescription,
-        },
-        linkvertise: {
-          dashboardDescription: linkvertiseDescription,
-        },
-      };
-
-      const keyPlanConfig = {
-        freeKey: { ttlHours: freeTtlHours },
-        paidMonth: { ttlDays: paidMonthTtlDays },
-        paidLifetime: { ttlDays: paidLifetimeTtlDays },
-      };
-
-      try {
-        await Promise.all([
-          setFreeKeyUiConfig(uiConfig),
-          setKeyPlanConfig(keyPlanConfig),
-        ]);
-      } catch (err) {
-        console.error("[serverv2] update-key-config error:", err);
-      }
-
-      res.redirect("/admin/discord");
-    }
-  );
-
-  // Ban user
-  app.post("/admin/discord/ban-user", requireAdmin, async (req, res) => {
-    const discordId = (req.body.discordId || "").trim();
-    if (!discordId) {
-      return res.redirect("/admin/discord");
-    }
-
-    try {
-      await setDiscordUserProfilePersistent(discordId, { banned: true });
-    } catch (err) {
-      console.error("[serverv2] ban-user error:", err);
-    }
-
-    res.redirect("/admin/discord?user=" + encodeURIComponent(discordId));
-  });
-
-  // Unban user
-  app.post("/admin/discord/unban-user", requireAdmin, async (req, res) => {
-    const discordId = (req.body.discordId || "").trim();
-    if (!discordId) {
-      return res.redirect("/admin/discord");
-    }
-
-    try {
-      await setDiscordUserProfilePersistent(discordId, { banned: false });
-    } catch (err) {
-      console.error("[serverv2] unban-user error:", err);
-    }
-
-    res.redirect("/admin/discord?user=" + encodeURIComponent(discordId));
-  });
-
-  // Delete semua key user
-  app.post(
-    "/admin/discord/delete-user-keys",
-    requireAdmin,
-    async (req, res) => {
-      const discordId = (req.body.discordId || "").trim();
-      if (!discordId) {
-        return res.redirect("/admin/discord");
-      }
-
-      try {
-        // Free keys
-        const freeIdxKey = userIndexKey(discordId);
-        const freeTokens = await kvGetJson(freeIdxKey);
-        if (Array.isArray(freeTokens)) {
-          for (const t of freeTokens) {
-            if (!t) continue;
-            try {
-              await deleteFreeKeyPersistent(t, discordId);
-            } catch (err) {
-              console.error(
-                "[serverv2] delete-user-keys free token error:",
-                t,
-                err
-              );
-            }
-          }
-          // kosongkan index (walaupun deleteFreeKeyPersistent sudah bersihkan)
-          await kvSetJson(freeIdxKey, []);
-        }
-
-        // Paid keys
-        const paidIdxKey = paidUserIndexKey(discordId);
-        const paidTokens = await kvGetJson(paidIdxKey);
-        if (Array.isArray(paidTokens)) {
-          for (const t of paidTokens) {
-            if (!t) continue;
-            try {
-              const rec = await getPaidKeyRecord(t);
-              if (!rec) continue;
-              await setPaidKeyRecord({
-                token: t,
-                createdAt: rec.createdAt,
-                byIp: rec.byIp,
-                expiresAfter: rec.expiresAfter,
-                type: rec.type,
-                valid: false,
-                deleted: true,
-                ownerDiscordId: discordId,
-              });
-            } catch (err) {
-              console.error(
-                "[serverv2] delete-user-keys paid token error:",
-                t,
-                err
-              );
-            }
-          }
-          await kvSetJson(paidIdxKey, []);
-        }
-      } catch (err) {
-        console.error("[serverv2] delete-user-keys error:", err);
-      }
-
-      res.redirect("/admin/discord?user=" + encodeURIComponent(discordId));
-    }
-  );
-
-  // Update 1 key (createdAt + time left TTL)
-  app.post("/admin/discord/update-key", requireAdmin, async (req, res) => {
-    const discordId = (req.body.discordId || "").trim();
-    const token = (req.body.token || "").trim();
-    const createdAtRaw = req.body.createdAt;
-    const expiresTTLRaw = req.body.expiresAt; // HH:MM:SS
-
-    if (!discordId || !token) {
-      return res.redirect("/admin/discord");
-    }
-
-    const redirectUrl =
-      "/admin/discord?user=" + encodeURIComponent(discordId);
-
-    try {
-      const now = nowMs();
-      const newCreatedMs = parseDateOrTimestamp(createdAtRaw);
-      const ttlMs = parseHHMMSS(expiresTTLRaw);
-      const newExpiresMs =
-        ttlMs && ttlMs > 0 ? now + ttlMs : null;
-
-      let paidRec = await getPaidKeyRecord(token);
-      let freeRec = null;
-      if (!paidRec) {
-        freeRec = await kvGetJson(tokenKey(token));
-      }
-
-      if (!paidRec && !freeRec) {
-        return res.redirect(redirectUrl);
-      }
-
-      if (paidRec) {
-        const updated = {
-          token,
-          createdAt: newCreatedMs || paidRec.createdAt || now,
-          byIp: paidRec.byIp,
-          expiresAfter:
-            newExpiresMs !== null
-              ? newExpiresMs
-              : paidRec.expiresAfter || 0,
-          type: paidRec.type,
-          valid: paidRec.valid,
-          deleted: paidRec.deleted,
-          ownerDiscordId: paidRec.ownerDiscordId || discordId,
-        };
-        await setPaidKeyRecord(updated);
-      } else if (freeRec) {
-        if (String(freeRec.userId) !== String(discordId)) {
-          console.warn(
-            "[serverv2] update-key: free key user mismatch, tetap update sebagai admin.",
-            token,
-            freeRec.userId,
-            discordId
-          );
-        }
-        if (newCreatedMs) {
-          freeRec.createdAt = newCreatedMs;
-        }
-        if (newExpiresMs !== null) {
-          freeRec.expiresAfter = newExpiresMs;
-        }
-        const expired = freeRec.expiresAfter <= now;
-        freeRec.deleted = freeRec.deleted || false;
-        freeRec.valid = !freeRec.deleted && !expired;
-        await kvSetJson(tokenKey(token), freeRec);
-      }
-    } catch (err) {
-      console.error("[serverv2] update-key error:", err);
-    }
-
-    res.redirect(redirectUrl);
-  });
-
-  // Renew 1 key (extend expiry)
-  app.post("/admin/discord/renew-key", requireAdmin, async (req, res) => {
-    const discordId = (req.body.discordId || "").trim();
-    const token = (req.body.token || "").trim();
-
-    if (!discordId || !token) {
-      return res.redirect("/admin/discord");
-    }
-
-    const redirectUrl =
-      "/admin/discord?user=" + encodeURIComponent(discordId);
-
-    try {
-      const now = nowMs();
-      let paidRec = await getPaidKeyRecord(token);
-      let freeRec = null;
-      if (!paidRec) {
-        freeRec = await kvGetJson(tokenKey(token));
-      }
-
-      if (!paidRec && !freeRec) {
-        return res.redirect(redirectUrl);
-      }
-
-      if (paidRec) {
-        const typeRaw = (paidRec.type || "").toLowerCase();
-        const durationMs = await computePaidRenewDurationMs(typeRaw);
-        let newExpires;
-        if (durationMs === 0) {
-          // lifetime no-expire
-          newExpires = 0;
-        } else {
-          newExpires = now + durationMs;
-        }
-        await setPaidKeyRecord({
-          token,
-          createdAt: paidRec.createdAt || now,
-          byIp: paidRec.byIp,
-          expiresAfter: newExpires,
-          type: paidRec.type,
-          valid: true,
-          deleted: false,
-          ownerDiscordId: paidRec.ownerDiscordId || discordId,
-        });
-      } else if (freeRec) {
-        await extendFreeKeyPersistent(token);
-      }
-    } catch (err) {
-      console.error("[serverv2] renew-key error:", err);
-    }
-
-    res.redirect(redirectUrl);
-  });
-
-  // Delete 1 key (paid / free) untuk 1 user di admin-dashboarddiscord
-  app.post("/admin/discord/delete-key", requireAdmin, async (req, res) => {
-    const discordId = (req.body.discordId || "").trim();
-    const token = (req.body.token || "").trim();
-
-    if (!discordId || !token) {
-      return res.redirect("/admin/discord");
-    }
-
-    const redirectUrl =
-      "/admin/discord?user=" + encodeURIComponent(discordId);
-
-    try {
-      // 1) Paid key: tandai deleted + invalid + bersihkan index paid
-      let paidRec = await getPaidKeyRecord(token);
-      if (paidRec) {
-        await setPaidKeyRecord({
-          token,
-          createdAt: paidRec.createdAt,
-          byIp: paidRec.byIp,
-          expiresAfter: paidRec.expiresAfter,
-          type: paidRec.type,
-          valid: false,
-          deleted: true,
-          ownerDiscordId: paidRec.ownerDiscordId || discordId,
-        });
-
-        try {
-          const paidIdxKey = paidUserIndexKey(discordId);
-          const paidTokens = await kvGetJson(paidIdxKey);
-          if (Array.isArray(paidTokens)) {
-            const filteredPaid = paidTokens.filter((t) => t && t !== token);
-            await kvSetJson(paidIdxKey, filteredPaid);
-          }
-        } catch (err2) {
-          console.error(
-            "[serverv2] delete-key: cleanup paid index error:",
-            err2
-          );
-        }
-      }
-
-      // 2) Free key: delete + bersihkan index via deleteFreeKeyPersistent
-      const freeRec = await kvGetJson(tokenKey(token));
-      if (freeRec && String(freeRec.userId) === String(discordId)) {
-        await deleteFreeKeyPersistent(token, discordId);
-      }
-    } catch (err) {
-      console.error("[serverv2] delete-key error:", err);
-    }
-
-    res.redirect(redirectUrl);
-  });
-
-  // =========================
-  // ROUTES – DISCORD OAUTH2
-  // =========================
-
-  app.get("/auth/discord", (req, res) => {
-    const state = crypto.randomBytes(16).toString("hex");
-    if (req.session) {
-      req.session.oauthState = state;
-    }
-    const url = makeDiscordAuthUrl(state);
-    res.redirect(url);
-  });
-
-  app.get("/auth/discord/callback", async (req, res) => {
-    const { code, state, error } = req.query;
-
-    if (error) {
-      console.error("Discord OAuth error:", error);
-      return res.redirect("/discord-login?error=oauth");
-    }
-
-    if (!code) {
-      return res.redirect("/discord-login?error=nocode");
-    }
-
-    if (!req.session || !state || state !== req.session.oauthState) {
-      console.warn("[serverv2] Invalid OAuth state.");
-      return res.redirect("/discord-login?error=state");
-    }
-
-    req.session.oauthState = null;
-
-    try {
-      const tokenRes = await fetch("https://discord.com/api/oauth2/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          client_id: DISCORD_CLIENT_ID,
-          client_secret: DISCORD_CLIENT_SECRET,
-          grant_type: "authorization_code",
-          code,
-          redirect_uri: DISCORD_REDIRECT_URI,
-        }),
-      });
-
-      const tokenText = await tokenRes.text();
-      if (!tokenRes.ok) {
-        console.error(
-          "[serverv2] Token error:",
-          tokenRes.status,
-          tokenText.slice(0, 200)
-        );
-        return res.redirect("/discord-login?error=token");
-      }
-
-      let tokenData;
-      try {
-        tokenData = JSON.parse(tokenText);
-      } catch {
-        console.error("[serverv2] Token JSON parse error:", tokenText);
-        return res.redirect("/discord-login?error=tokenjson");
-      }
-
-      const accessToken = tokenData.access_token;
-      if (!accessToken) {
-        console.error("[serverv2] access_token kosong.");
-        return res.redirect("/discord-login?error=tokenempty");
-      }
-
-      const userRes = await fetch("https://discord.com/api/users/@me", {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-
-      const userText = await userRes.text();
-      if (!userRes.ok) {
-        console.error(
-          "[serverv2] User error:",
-          userRes.status,
-          userText.slice(0, 200)
-        );
-        return res.redirect("/discord-login?error=user");
-      }
-
-      let user;
-      try {
-        user = JSON.parse(userText);
-      } catch {
-        console.error("[serverv2] User JSON parse error:", userText);
-        return res.redirect("/discord-login?error=userjson");
-      }
-
-      let guildCount = 0;
-      try {
-        const guildRes = await fetch(
-          "https://discord.com/api/users/@me/guilds",
-          {
-            headers: { Authorization: `Bearer ${accessToken}` },
-          }
-        );
-        if (guildRes.ok) {
-          const guilds = await guildRes.json();
-          if (Array.isArray(guilds)) guildCount = guilds.length;
-        }
-      } catch {
-        // tidak fatal
-      }
-
-      const isOwner = isOwnerId(user.id); // hanya untuk badge, bukan login admin
-
-      req.session.discordUser = {
-        id: user.id,
-        username: user.username,
-        global_name: user.global_name || user.username,
-        discriminator: user.discriminator,
-        avatar: user.avatar,
-        email: user.email,
-        guildCount,
-        banner: user.banner || null,
-        isOwner,
-      };
-
-      if (hasFreeKeyKV) {
-        try {
-          await setDiscordUserProfilePersistent(user.id, {
-            id: user.id,
-            username: user.username,
-            global_name: user.global_name || user.username,
-            discriminator: user.discriminator,
-            avatar: user.avatar,
-            banner: user.banner || null,
-            email: user.email || null,
-            guildCount,
-            lastLoginAt: nowMs(),
-            isOwner,
-          });
-        } catch (e) {
-          console.warn("[serverv2] gagal simpan profil discord ke KV:", e);
-        }
-      }
-
-      res.redirect("/dashboard");
-    } catch (err) {
-      console.error("[serverv2] OAuth callback exception:", err);
-      res.redirect("/discord-login?error=exception");
-    }
-  });
-
-  app.post("/logout", (req, res) => {
-    if (req.session) {
-      req.session.discordUser = null;
-    }
-    res.redirect("/");
-  });
-
-  app.get("/logout", (req, res) => {
-    if (req.session) {
-      req.session.discordUser = null;
-    }
-    res.redirect("/");
-  });
-
-  console.log(
-    "[serverv2] Discord OAuth + Dashboard + GetFreeKey + FreeKey API + PaidKey API + PaidFree User-Info API + Admin Discord Dashboard routes mounted (admin via session)."
-  );
-};
