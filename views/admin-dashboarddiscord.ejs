@@ -201,7 +201,8 @@
                     <th>Paid / Free</th>
                     <th>Last Login</th>
                     <th>Last Key Expires</th>
-                    <th>Status</th>
+                    <th>STATUS KEY</th>
+                    <th>STATUS ACC DC</th>
                     <th class="key-col-actions">Actions</th>
                   </tr>
                 </thead>
@@ -282,36 +283,46 @@
                         <% } %>
                       </td>
 
-                      <!-- STATUS (REVISI LOGIKA) -->
+                      <!-- STATUS KEY -->
                       <td class="table-main-text">
                         <%
                           var banned = !!row.banned;
                           var totalKeys = row.totalKeys || 0;
                           var activeKeys = row.activeKeys || 0;
-                          var statusLabel;
-                          var statusClass;
+                          var statusKeyLabel;
+                          var statusKeyClass;
 
-                          if (banned) {
-                            // User di-flag banned
-                            statusLabel = 'Banned';
-                            statusClass = 'status-pill status-pill--expired';
-                          } else if (totalKeys === 0) {
+                          if (totalKeys === 0) {
                             // Tidak punya key sama sekali
-                            statusLabel = 'No Keys';
-                            statusClass = 'status-pill status-pill--pending';
+                            statusKeyLabel = 'No Keys';
+                            statusKeyClass = 'status-pill status-pill--pending';
                           } else if (activeKeys > 0) {
-                            // Punya minimal 1 key yang masih aktif
-                            statusLabel = 'Active';
-                            statusClass = 'status-pill status-pill--active';
+                            // Ada minimal 1 key yang masih aktif
+                            statusKeyLabel = 'Active';
+                            statusKeyClass = 'status-pill status-pill--active';
                           } else {
                             // Punya key, tapi semua sudah expired / deleted
-                            statusLabel = 'Expired';
-                            statusClass = 'status-pill status-pill--expired';
+                            statusKeyLabel = 'Expired';
+                            statusKeyClass = 'status-pill status-pill--expired';
                           }
                         %>
-                        <span class="<%= statusClass %>">
+                        <span class="<%= statusKeyClass %>">
                           <span class="status-pill-dot"></span>
-                          <span class="status-pill-text"><%= statusLabel %></span>
+                          <span class="status-pill-text"><%= statusKeyLabel %></span>
+                        </span>
+                      </td>
+
+                      <!-- STATUS ACC DC -->
+                      <td class="table-main-text">
+                        <%
+                          var statusAccLabel = banned ? 'Banned' : 'Active';
+                          var statusAccClass = banned
+                            ? 'status-pill status-pill--expired'
+                            : 'status-pill status-pill--active';
+                        %>
+                        <span class="<%= statusAccClass %>">
+                          <span class="status-pill-dot"></span>
+                          <span class="status-pill-text"><%= statusAccLabel %></span>
                         </span>
                       </td>
 
