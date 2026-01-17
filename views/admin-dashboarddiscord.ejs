@@ -282,18 +282,32 @@
                         <% } %>
                       </td>
 
-                      <!-- STATUS -->
+                      <!-- STATUS (REVISI LOGIKA) -->
                       <td class="table-main-text">
                         <%
                           var banned = !!row.banned;
-                          var hasKeys = (row.totalKeys || 0) > 0;
-                          var statusLabel = banned ? 'Banned' : (hasKeys ? 'Active' : 'No Keys');
-                          var statusClass =
-                            banned
-                              ? 'status-pill status-pill--expired'
-                              : hasKeys
-                              ? 'status-pill status-pill--active'
-                              : 'status-pill status-pill--pending';
+                          var totalKeys = row.totalKeys || 0;
+                          var activeKeys = row.activeKeys || 0;
+                          var statusLabel;
+                          var statusClass;
+
+                          if (banned) {
+                            // User di-flag banned
+                            statusLabel = 'Banned';
+                            statusClass = 'status-pill status-pill--expired';
+                          } else if (totalKeys === 0) {
+                            // Tidak punya key sama sekali
+                            statusLabel = 'No Keys';
+                            statusClass = 'status-pill status-pill--pending';
+                          } else if (activeKeys > 0) {
+                            // Punya minimal 1 key yang masih aktif
+                            statusLabel = 'Active';
+                            statusClass = 'status-pill status-pill--active';
+                          } else {
+                            // Punya key, tapi semua sudah expired / deleted
+                            statusLabel = 'Expired';
+                            statusClass = 'status-pill status-pill--expired';
+                          }
                         %>
                         <span class="<%= statusClass %>">
                           <span class="status-pill-dot"></span>
@@ -643,23 +657,23 @@
                             <!-- STATUS + LIVE COUNTDOWN -->
                             <td class="key-cell-status">
                               <%
-                                var statusLabel = k.status || 'Active';
-                                var statusClass =
-                                  statusLabel === 'Active'
+                                var statusLabelDetail = k.status || 'Active';
+                                var statusClassDetail =
+                                  statusLabelDetail === 'Active'
                                     ? 'status-pill status-pill--active'
-                                    : statusLabel === 'Expired'
+                                    : statusLabelDetail === 'Expired'
                                     ? 'status-pill status-pill--expired'
-                                    : statusLabel === 'Deleted'
+                                    : statusLabelDetail === 'Deleted'
                                     ? 'status-pill status-pill--expired'
                                     : 'status-pill status-pill--pending';
                               %>
                               <span
-                                class="<%= statusClass %>"
+                                class="<%= statusClassDetail %>"
                                 data-status-pill="1"
                                 data-token="<%= k.token || k.key %>"
                               >
                                 <span class="status-pill-dot"></span>
-                                <span class="status-pill-text"><%= statusLabel %></span>
+                                <span class="status-pill-text"><%= statusLabelDetail %></span>
                               </span>
                               <div
                                 class="table-sub-text time-left-container"
