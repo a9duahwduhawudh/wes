@@ -265,6 +265,7 @@ async function extendFreeKeyPersistent(token) {
   return rec;
 }
 
+// Delete free key + bersihkan index user
 async function deleteFreeKeyPersistent(token, userIdCheck) {
   const key = tokenKey(token);
   const rec = await kvGetJson(key);
@@ -278,6 +279,20 @@ async function deleteFreeKeyPersistent(token, userIdCheck) {
   rec.valid = false;
 
   await kvSetJson(key, rec);
+
+  if (hasFreeKeyKV && rec.userId) {
+    try {
+      const idxKey = userIndexKey(rec.userId);
+      let index = await kvGetJson(idxKey);
+      if (Array.isArray(index)) {
+        const filtered = index.filter((t) => t && t !== token);
+        await kvSetJson(idxKey, filtered);
+      }
+    } catch (err) {
+      console.error("[serverv2] deleteFreeKeyPersistent index cleanup error:", err);
+    }
+  }
+
   return { ok: true, updated: true };
 }
 
@@ -430,6 +445,7 @@ async function setPaidKeyRecord(payload) {
   return normalizePaidKeyRecord(rec);
 }
 
+// Paid keys per user – skip yang deleted (hilang dari dashboard & user-info)
 async function getPaidKeysForUserPersistent(discordId) {
   if (!hasFreeKeyKV) return [];
 
@@ -452,14 +468,18 @@ async function getPaidKeysForUserPersistent(discordId) {
         : false;
     const deleted = !!rec.deleted;
 
+    // Jangan tampilkan key yang sudah dihapus (deleted=true)
+    if (deleted) {
+      continue;
+    }
+
     let providerLabel = "ExHub Paid";
     const t = (rec.type || "").toString().toLowerCase();
     if (t === "month") providerLabel = "PAID MONTH";
     else if (t === "lifetime") providerLabel = "PAID LIFETIME";
 
     let statusLabel;
-    if (deleted) statusLabel = "Deleted";
-    else if (expired) statusLabel = "Expired";
+    if (expired) statusLabel = "Expired";
     else if (rec.valid) statusLabel = "Active";
     else statusLabel = "Pending";
 
@@ -479,7 +499,7 @@ async function getPaidKeysForUserPersistent(discordId) {
       expiresAfter: rec.expiresAfter || null,
       valid: rec.valid,
       expired,
-      deleted,
+      deleted: false,
       type: rec.type || null,
       createdAt: rec.createdAt || null,
       ownerDiscordId: rec.ownerDiscordId || null,
@@ -947,15 +967,24 @@ module.exports = function mountDiscordOAuth(app) {
     const userId = discordUser.id;
 
     const doneFlag = String(req.query.done || "") === "1";
-    const queryAds = req.query.ads || "workink";
-    let adsProvider = canonicalAdsProvider(queryAds);
 
-    if (req.session) {
-      if (queryAds) {
+    // Param ?ads=... bisa kosong ketika callback hanya ?done=1
+    const rawAdsParam =
+      typeof req.query.ads === "string" ? req.query.ads : "";
+
+    let adsProvider;
+    if (rawAdsParam) {
+      // Ada ?ads → pakai & simpan ke session
+      adsProvider = canonicalAdsProvider(rawAdsParam);
+      if (req.session) {
         req.session.lastFreeKeyAdsProvider = adsProvider;
-      } else if (!queryAds && req.session.lastFreeKeyAdsProvider) {
-        adsProvider = canonicalAdsProvider(req.session.lastFreeKeyAdsProvider);
       }
+    } else if (req.session && req.session.lastFreeKeyAdsProvider) {
+      // Tidak ada ?ads, pakai provider terakhir dari session
+      adsProvider = canonicalAdsProvider(req.session.lastFreeKeyAdsProvider);
+    } else {
+      // Default awal kalau belum ada riwayat
+      adsProvider = "workink";
     }
 
     if (doneFlag && req.session) {
@@ -1490,7 +1519,7 @@ module.exports = function mountDiscordOAuth(app) {
   // --------------------------------------------------
   // API kecil: GET /api/discord/owners
   // (hanya info, tidak dipakai untuk login admin)
-// --------------------------------------------------
+  // --------------------------------------------------
   app.get("/api/discord/owners", (req, res) => {
     res.json({ ownerIds: OWNER_IDS });
   });
@@ -1498,7 +1527,7 @@ module.exports = function mountDiscordOAuth(app) {
   // =========================
   // ROUTES – ADMIN DISCORD DASHBOARD & MANAGEMENT
   // Proteksi pakai requireAdmin (session ADMIN_USER / ADMIN_PASS)
-// =========================
+  // =========================
   app.get("/admin/discord", requireAdmin, async (req, res) => {
     const query = (req.query.q || "").trim();
     const filter = req.query.filter || "all";
@@ -1803,7 +1832,7 @@ module.exports = function mountDiscordOAuth(app) {
               );
             }
           }
-          // kosongkan index
+          // kosongkan index (walaupun deleteFreeKeyPersistent sudah bersihkan)
           await kvSetJson(freeIdxKey, []);
         }
 
@@ -1973,7 +2002,7 @@ module.exports = function mountDiscordOAuth(app) {
     res.redirect(redirectUrl);
   });
 
-  // Delete 1 key
+  // Delete 1 key (paid / free) untuk 1 user di admin-dashboarddiscord
   app.post("/admin/discord/delete-key", requireAdmin, async (req, res) => {
     const discordId = (req.body.discordId || "").trim();
     const token = (req.body.token || "").trim();
@@ -1986,6 +2015,7 @@ module.exports = function mountDiscordOAuth(app) {
       "/admin/discord?user=" + encodeURIComponent(discordId);
 
     try {
+      // 1) Paid key: tandai deleted + invalid + bersihkan index paid
       let paidRec = await getPaidKeyRecord(token);
       if (paidRec) {
         await setPaidKeyRecord({
@@ -1998,8 +2028,23 @@ module.exports = function mountDiscordOAuth(app) {
           deleted: true,
           ownerDiscordId: paidRec.ownerDiscordId || discordId,
         });
+
+        try {
+          const paidIdxKey = paidUserIndexKey(discordId);
+          const paidTokens = await kvGetJson(paidIdxKey);
+          if (Array.isArray(paidTokens)) {
+            const filteredPaid = paidTokens.filter((t) => t && t !== token);
+            await kvSetJson(paidIdxKey, filteredPaid);
+          }
+        } catch (err2) {
+          console.error(
+            "[serverv2] delete-key: cleanup paid index error:",
+            err2
+          );
+        }
       }
 
+      // 2) Free key: delete + bersihkan index via deleteFreeKeyPersistent
       const freeRec = await kvGetJson(tokenKey(token));
       if (freeRec && String(freeRec.userId) === String(discordId)) {
         await deleteFreeKeyPersistent(token, discordId);
