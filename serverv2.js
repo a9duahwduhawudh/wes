@@ -52,6 +52,9 @@ const hasFreeKeyKV = !!(KV_REST_API_URL && KV_REST_API_TOKEN);
 // Index semua user Discord yang pernah login
 const DISCORD_USER_INDEX_KEY = "exhub:discord:userindex";
 
+// Snapshot agregat eksekusi loader (per key/per Discord)
+const EXEC_USERS_KEY = "exhub:exec:users";
+
 async function kvRequest(pathPart) {
   if (!hasFreeKeyKV || typeof fetch === "undefined") return null;
 
@@ -744,6 +747,201 @@ function makeDiscordBannerUrl(profile) {
     return `https://cdn.discordapp.com/banners/${id}/${banner}.png?size=512`;
   }
   return null;
+}
+
+// ---------------------------------------------------------
+// Exec tracking helpers (User Exec Detail /admin/discord)
+// ---------------------------------------------------------
+
+// Snapshot eksekusi loader per key (diambil dari KV EXEC_USERS_KEY)
+//
+// Struktur KV yang di-support (fleksibel):
+// 1) Mode byKey:
+//    {
+//      "byKey": {
+//         "EXHUBPAID-XXXX": { ... },
+//         "EXHUBFREE-YYYY": { ... }
+//      }
+//    }
+//
+// 2) Mode per Discord user:
+//    {
+//      "users": {
+//         "123456789": {
+//            discordId: "123456789",
+//            username: "...",
+//            // ...
+//            keys: {
+//               "EXHUBPAID-XXXX": { ... },
+//               "EXHUBFREE-YYYY": { ... }
+//            }
+//         }
+//      }
+//    }
+//
+// server.js / /api/exec yang kamu punya cukup isi salah satu bentuk itu.
+// Di sini kita cuma baca dan mapping ke token -> execStats.
+//
+function normalizeExecStatsFromKeyEntry(keyToken, keyEntry, userContext, discordId) {
+  if (!keyEntry || typeof keyEntry !== "object") return null;
+  const uc = userContext && typeof userContext === "object" ? userContext : {};
+
+  const username =
+    keyEntry.robloxUsername ||
+    keyEntry.username ||
+    uc.robloxUsername ||
+    uc.username ||
+    null;
+
+  const displayName =
+    keyEntry.robloxDisplayName ||
+    keyEntry.displayName ||
+    uc.robloxDisplayName ||
+    uc.displayName ||
+    null;
+
+  let userId = null;
+  const candIds = [
+    keyEntry.robloxUserId,
+    keyEntry.userId,
+    uc.robloxUserId,
+    uc.userId,
+  ];
+  for (const cid of candIds) {
+    if (cid === undefined || cid === null || cid === "") continue;
+    const n = Number(cid);
+    if (!Number.isNaN(n)) {
+      userId = n;
+      break;
+    }
+  }
+
+  const hwid = keyEntry.hwid || uc.hwid || null;
+  const executorUse =
+    keyEntry.executorUse || keyEntry.executor || uc.executorUse || null;
+
+  let totalExecutes = null;
+  if (typeof keyEntry.totalExecutes === "number") {
+    totalExecutes = keyEntry.totalExecutes;
+  } else if (typeof keyEntry.execCount === "number") {
+    totalExecutes = keyEntry.execCount;
+  } else if (typeof uc.totalExecutes === "number") {
+    totalExecutes = uc.totalExecutes;
+  }
+
+  const lastIp =
+    keyEntry.lastIp || keyEntry.ip || uc.lastIp || uc.ip || null;
+
+  let allMapList = [];
+  if (Array.isArray(keyEntry.allMapList)) {
+    allMapList = keyEntry.allMapList;
+  } else if (Array.isArray(uc.allMapList)) {
+    allMapList = uc.allMapList;
+  }
+
+  const kt = String(keyToken || "").trim();
+  if (!kt) return null;
+
+  return {
+    keyToken: kt,
+    discordId: discordId ? String(discordId) : uc.discordId || null,
+    username,
+    displayName,
+    userId,
+    hwid,
+    executorUse,
+    totalExecutes,
+    lastIp,
+    ip: lastIp,
+    allMapList,
+  };
+}
+
+async function loadExecIndexByToken() {
+  if (!hasFreeKeyKV) return {};
+  let snap;
+  try {
+    snap = await kvGetJson(EXEC_USERS_KEY);
+  } catch (err) {
+    console.warn("[serverv2] loadExecIndexByToken KV error:", err);
+    return {};
+  }
+
+  const index = {};
+  if (!snap || typeof snap !== "object") return index;
+
+  // Mode 1: byKey langsung
+  if (snap.byKey && typeof snap.byKey === "object") {
+    for (const [token, raw] of Object.entries(snap.byKey)) {
+      const es = normalizeExecStatsFromKeyEntry(
+        token,
+        raw,
+        raw,
+        raw.discordId || raw.ownerDiscordId || null
+      );
+      if (!es) continue;
+      const canon = es.keyToken.toUpperCase();
+      if (!index[canon]) index[canon] = es;
+    }
+    return index;
+  }
+
+  // Mode 2: per Discord user, lalu per key di bawahnya
+  const usersObj =
+    (snap.users && typeof snap.users === "object" && snap.users) ||
+    (snap.byDiscordId &&
+      typeof snap.byDiscordId === "object" &&
+      snap.byDiscordId) ||
+    null;
+
+  if (usersObj) {
+    for (const [discordId, u] of Object.entries(usersObj)) {
+      if (!u || typeof u !== "object") continue;
+      const uc = Object.assign({}, u, { discordId });
+      const keysObj =
+        (u.keys && typeof u.keys === "object" && u.keys) ||
+        (u.keyStats && typeof u.keyStats === "object" && u.keyStats) ||
+        null;
+      if (!keysObj) continue;
+
+      for (const [token, keyEntry] of Object.entries(keysObj)) {
+        const es = normalizeExecStatsFromKeyEntry(
+          token,
+          keyEntry,
+          uc,
+          discordId
+        );
+        if (!es) continue;
+        const canon = es.keyToken.toUpperCase();
+        if (!index[canon]) {
+          index[canon] = es;
+        } else {
+          // Merge sederhana: pilih totalExecutes terbesar, ip & mapList terbaru
+          const prev = index[canon];
+          const merged = Object.assign({}, prev);
+
+          if (
+            typeof es.totalExecutes === "number" &&
+            (typeof prev.totalExecutes !== "number" ||
+              es.totalExecutes > prev.totalExecutes)
+          ) {
+            merged.totalExecutes = es.totalExecutes;
+          }
+          if (es.lastIp && !prev.lastIp) {
+            merged.lastIp = es.lastIp;
+            merged.ip = es.lastIp;
+          }
+          if (Array.isArray(es.allMapList) && es.allMapList.length) {
+            merged.allMapList = es.allMapList;
+          }
+
+          index[canon] = merged;
+        }
+      }
+    }
+  }
+
+  return index;
 }
 
 // Normalisasi Paid key untuk admin-dashboarddiscord
@@ -1787,6 +1985,17 @@ module.exports = function mountDiscordOAuth(app) {
       discordIds = [];
     }
 
+    // Load sekali index eksekusi per key (token -> execStats)
+    let execIndexByToken = {};
+    if (hasFreeKeyKV) {
+      try {
+        execIndexByToken = await loadExecIndexByToken();
+      } catch (err) {
+        console.error("[serverv2] loadExecIndexByToken error:", err);
+        execIndexByToken = {};
+      }
+    }
+
     const perUserData = [];
     let totalKeysCount = 0;
     let totalPaidKeysCount = 0;
@@ -1818,7 +2027,16 @@ module.exports = function mountDiscordOAuth(app) {
           .map((fk) => normalizeFreeKeyForAdmin(fk, discordId))
           .filter(Boolean);
 
-        const keysAll = normalizedPaid.concat(normalizedFree);
+        const baseKeysAll = normalizedPaid.concat(normalizedFree);
+
+        const keysAll = baseKeysAll.map((k) => {
+          const token = k.token || k.key;
+          if (!token) return k;
+          const es =
+            execIndexByToken[String(token).trim().toUpperCase()] || null;
+          if (!es) return k;
+          return Object.assign({}, k, { execStats: es });
+        });
 
         const summary = {
           total: keysAll.length,
