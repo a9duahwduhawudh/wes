@@ -7,6 +7,15 @@
   <link rel="icon" type="image/png" href="/img/ExLogo2.png" />
   <link rel="stylesheet" href="/css/mainv2.css" />
 
+  <!-- Linkvertise Full Script API: monetisasi semua external link di halaman Get Free Key -->
+  <script src="https://publisher.linkvertise.com/cdn/linkvertise.js"></script>
+  <script>
+    // Jika ingin mengecualikan domain tertentu (misalnya domain sendiri, Discord, dll),
+    // sesuaikan blacklist. Contoh:
+    // linkvertise(2995260, { whitelist: [], blacklist: ["exc-webs.vercel.app", "discord.com", "discord.gg"] });
+    linkvertise(2995260, { whitelist: [], blacklist: [""] });
+  </script>
+
   <!-- Tambahan styling kecil khusus halaman ini -->
   <style>
     .getkey-banned-pill {
@@ -117,42 +126,7 @@
       var validityHours =
         (typeof defaultKeyHours !== 'undefined' && defaultKeyHours) ? defaultKeyHours : 3;
 
-      // =========================
-      //  TEXT HERO (DARI CONFIG)
-      // =========================
-      var heroMain = (uiGlobal && uiGlobal.heroMain) ? uiGlobal.heroMain : 'Complete';
-      var heroHighlight = (uiGlobal && uiGlobal.heroHighlight) ? uiGlobal.heroHighlight : 'Verification';
-
-      var subtitleText;
-      if (uiGlobal && uiGlobal.subtitle) {
-        subtitleText = uiGlobal.subtitle;
-      } else if (uiGlobal && uiGlobal.dashboardCaption) {
-        // kompatibel dengan nama field lama
-        subtitleText = uiGlobal.dashboardCaption;
-      } else {
-        subtitleText = 'Complete a quick verification to get your ExHub key and start using our scripts.';
-      }
-
-      var bullet1Text = (uiGlobal && uiGlobal.bullet1)
-        ? uiGlobal.bullet1
-        : 'Secure & HWID-aware key system.';
-
-      var bullet2Text = (uiGlobal && uiGlobal.bullet2)
-        ? uiGlobal.bullet2
-        : 'Instant delivery right after verification.';
-
-      var bullet3Text;
-      if (uiGlobal && uiGlobal.bullet3) {
-        bullet3Text = uiGlobal.bullet3;
-      } else if (uiGlobal && uiGlobal.validityLabel) {
-        bullet3Text = uiGlobal.validityLabel;
-      } else {
-        bullet3Text = validityHours + 'h validity, easy renew when expired.';
-      }
-
-      // =========================
-      //  PROGRESS ADS
-      // =========================
+      // Status checkpoint dari server
       var adsDoneFromServer = (typeof adsProgressDone !== 'undefined') ? !!adsProgressDone : false;
       var adsUsedFromServer = (typeof adsUsedFlag !== 'undefined') ? !!adsUsedFlag : false;
 
@@ -187,16 +161,26 @@
       <div class="getkey-hero-left">
         <p class="getkey-eyebrow">Get Free Key</p>
         <h1 class="getkey-title">
-          <%= heroMain %> <span><%= heroHighlight %></span>
+          Complete <span>Verification</span>
         </h1>
         <p class="getkey-subtitle">
-          <%= subtitleText %>
+          <% if (uiGlobal && uiGlobal.dashboardCaption) { %>
+            <%= uiGlobal.dashboardCaption %>
+          <% } else { %>
+            Complete a quick verification to get your ExHub key and start using our scripts.
+          <% } %>
         </p>
 
         <ul class="getkey-bullets">
-          <li><%= bullet1Text %></li>
-          <li><%= bullet2Text %></li>
-          <li><%= bullet3Text %></li>
+          <li>Secure & HWID-aware key system.</li>
+          <li>Instant delivery right after verification.</li>
+          <li>
+            <% if (uiGlobal && uiGlobal.validityLabel) { %>
+              <%= uiGlobal.validityLabel %>
+            <% } else { %>
+              <%= validityHours %>h validity, easy renew when expired.
+            <% } %>
+          </li>
         </ul>
 
         <% if (isBannedAccount) { %>
