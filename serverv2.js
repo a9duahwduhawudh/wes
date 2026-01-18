@@ -752,10 +752,10 @@ function makeDiscordBannerUrl(profile) {
 // ---------------------------------------------------------
 // Exec tracking helpers (User Exec Detail /admin/discord)
 // ---------------------------------------------------------
-
-// Snapshot eksekusi loader per key (diambil dari KV EXEC_USERS_KEY)
 //
-// Struktur KV yang di-support (fleksibel):
+// Data diambil dari KV EXEC_USERS_KEY ("exhub:exec:users").
+// Bentuk KV yang disupport (fleksibel):
+//
 // 1) Mode byKey:
 //    {
 //      "byKey": {
@@ -779,8 +779,13 @@ function makeDiscordBannerUrl(profile) {
 //      }
 //    }
 //
-// server.js / /api/exec yang kamu punya cukup isi salah satu bentuk itu.
-// Di sini kita cuma baca dan mapping ke token -> execStats.
+// 3) Mode root (langsung token → entry):
+//    {
+//      "EXHUBPAID-XXXX": { ... },
+//      "EXHUBFREE-YYYY": { ... }
+//    }
+//
+// /api/exec di server.js cukup menulis ke salah satu bentuk ini.
 //
 function normalizeExecStatsFromKeyEntry(keyToken, keyEntry, userContext, discordId) {
   if (!keyEntry || typeof keyEntry !== "object") return null;
@@ -816,9 +821,13 @@ function normalizeExecStatsFromKeyEntry(keyToken, keyEntry, userContext, discord
     }
   }
 
-  const hwid = keyEntry.hwid || uc.hwid || null;
+  const hwid = keyEntry.hwid || keyEntry.HWID || uc.hwid || uc.HWID || null;
   const executorUse =
-    keyEntry.executorUse || keyEntry.executor || uc.executorUse || null;
+    keyEntry.executorUse ||
+    keyEntry.executor ||
+    uc.executorUse ||
+    uc.executor ||
+    null;
 
   let totalExecutes = null;
   if (typeof keyEntry.totalExecutes === "number") {
@@ -830,7 +839,11 @@ function normalizeExecStatsFromKeyEntry(keyToken, keyEntry, userContext, discord
   }
 
   const lastIp =
-    keyEntry.lastIp || keyEntry.ip || uc.lastIp || uc.ip || null;
+    keyEntry.lastIp ||
+    keyEntry.ip ||
+    uc.lastIp ||
+    uc.ip ||
+    null;
 
   let allMapList = [];
   if (Array.isArray(keyEntry.allMapList)) {
@@ -883,7 +896,6 @@ async function loadExecIndexByToken() {
       const canon = es.keyToken.toUpperCase();
       if (!index[canon]) index[canon] = es;
     }
-    return index;
   }
 
   // Mode 2: per Discord user, lalu per key di bawahnya
@@ -939,6 +951,22 @@ async function loadExecIndexByToken() {
         }
       }
     }
+  }
+
+  // Mode 3: token langsung di root (skip key khusus)
+  for (const [token, raw] of Object.entries(snap)) {
+    if (token === "byKey" || token === "users" || token === "byDiscordId")
+      continue;
+    if (!raw || typeof raw !== "object") continue;
+    const es = normalizeExecStatsFromKeyEntry(
+      token,
+      raw,
+      raw,
+      raw.discordId || raw.ownerDiscordId || null
+    );
+    if (!es) continue;
+    const canon = es.keyToken.toUpperCase();
+    if (!index[canon]) index[canon] = es;
   }
 
   return index;
@@ -2029,13 +2057,28 @@ module.exports = function mountDiscordOAuth(app) {
 
         const baseKeysAll = normalizedPaid.concat(normalizedFree);
 
+        // Inject execStats ke setiap key berdasarkan token
         const keysAll = baseKeysAll.map((k) => {
           const token = k.token || k.key;
           if (!token) return k;
           const es =
             execIndexByToken[String(token).trim().toUpperCase()] || null;
           if (!es) return k;
-          return Object.assign({}, k, { execStats: es });
+          return Object.assign({}, k, {
+            execStats: {
+              username: es.username,
+              displayName: es.displayName,
+              userId: es.userId,
+              hwid: es.hwid,
+              executorUse: es.executorUse,
+              totalExecutes: es.totalExecutes,
+              lastIp: es.lastIp,
+              ip: es.ip,
+              allMapList: es.allMapList,
+              discordId: es.discordId,
+              keyToken: es.keyToken,
+            },
+          });
         });
 
         const summary = {
