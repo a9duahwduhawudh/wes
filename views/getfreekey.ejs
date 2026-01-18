@@ -108,6 +108,7 @@
       var uiWorkink     = uiConfig && uiConfig.workink     ? uiConfig.workink     : {};
       var uiLinkvertise = uiConfig && uiConfig.linkvertise ? uiConfig.linkvertise : {};
 
+      // Provider dari query (?ads=workink / ?ads=linkvertise) hanya untuk UI + mapping URL
       var providerId = (typeof adsProvider !== 'undefined' && adsProvider)
         ? String(adsProvider).toLowerCase()
         : 'workink';
@@ -143,12 +144,15 @@
 
       var currentId   = (typeof currentUserId !== 'undefined') ? currentUserId : '';
 
-      // URL ADS – fallback hardcode jika adsUrl tidak dikirim dari server
+      // URL ADS – fix berdasarkan provider:
+      // - /getfreekey?ads=linkvertise → link-target (Linkvertise)
+      // - /getfreekey?ads=workink (atau selain linkvertise) → work.ink
       var adsDefaultWorkink     = 'https://work.ink/23P2/exhubfreekey';
       var adsDefaultLinkvertise = 'https://link-target.net/2995260/uaE3u7P8CG5D';
-      var adsUrlFromServer      = (typeof adsUrl !== 'undefined' && adsUrl) ? adsUrl : null;
-      var adsUrlSafe = adsUrlFromServer ||
-        (providerId === 'linkvertise' ? adsDefaultLinkvertise : adsDefaultWorkink);
+
+      var adsUrlSafe = (providerId === 'linkvertise')
+        ? adsDefaultLinkvertise
+        : adsDefaultWorkink;
 
       var keyActionUrl   = (typeof keyAction !== 'undefined' && keyAction) ? keyAction : '/getfreekey/generate';
       var renewActionUrl = (typeof renewAction !== 'undefined' && renewAction) ? renewAction : '/getfreekey/extend';
@@ -251,7 +255,7 @@
                   START
                 </button>
               <% } else { %>
-                <!-- Boleh buka ads -->
+                <!-- Boleh buka ads: mapping sesuai providerId -->
                 <a
                   href="<%= adsUrlSafe %>"
                   class="btn-getkey-main"
@@ -268,7 +272,8 @@
                 <p class="getkey-helper-text">
                   This verification has been used. Run <strong>START</strong> again for a new action.
                 </p>
-              <% } else { %>
+              <% } %>
+              <% if (adsDoneFromServer && !adsUsedFromServer) { %>
                 <p class="getkey-helper-text">
                   Checkpoint unlocked — you can <strong>Generate</strong> or <strong>Renew</strong> one key.
                 </p>
