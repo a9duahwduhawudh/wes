@@ -6,6 +6,15 @@
   <title>ExHub — Script Library</title>
   <link rel="icon" type="image/png" href="/img/ExLogo2.png" />
   <link rel="stylesheet" href="/css/main.css" />
+
+  <!-- Linkvertise Full Script API: monetisasi semua external link -->
+  <script src="https://publisher.linkvertise.com/cdn/linkvertise.js"></script>
+  <script>
+    // Jika ingin mengecualikan domain tertentu dari monetisasi,
+    // ubah blacklist, contoh:
+    // linkvertise(2995260, { whitelist: [], blacklist: ["exc-webs.vercel.app", "discord.com", "discord.gg"] });
+    linkvertise(2995260, { whitelist: [], blacklist: [""] });
+  </script>
 </head>
 <body class="page-dark">
 
