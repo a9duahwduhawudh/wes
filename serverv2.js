@@ -1198,6 +1198,12 @@ module.exports = function mountDiscordOAuth(app) {
     "";
   const OWNER_IDS = RAW_OWNER_IDS.split(/[,\s]+/).filter(Boolean);
 
+  // Guild & Bot token untuk auto-join (guilds.join)
+  const OFFICIAL_GUILD_ID =
+    process.env.OFFICIAL_GUILD_ID || process.env.GUILD_ID || null;
+  const DISCORD_BOT_TOKEN =
+    process.env.DISCORD_TOKEN || process.env.BOT_TOKEN || null;
+
   function isOwnerId(id) {
     return OWNER_IDS.includes(String(id));
   }
@@ -1212,6 +1218,17 @@ module.exports = function mountDiscordOAuth(app) {
       "[serverv2] Discord OAuth configured:",
       "client_id=" + DISCORD_CLIENT_ID,
       "redirect_uri=" + DISCORD_REDIRECT_URI
+    );
+  }
+
+  if (OFFICIAL_GUILD_ID && DISCORD_BOT_TOKEN) {
+    console.log(
+      "[serverv2] Auto-join Discord diaktifkan ke guild:",
+      OFFICIAL_GUILD_ID
+    );
+  } else {
+    console.warn(
+      "[serverv2] Auto-join Discord TIDAK aktif. OFFICIAL_GUILD_ID/GUILD_ID atau DISCORD_TOKEN belum diset."
     );
   }
 
@@ -1237,11 +1254,13 @@ module.exports = function mountDiscordOAuth(app) {
     next();
   });
 
+  // Helper: bangun URL OAuth Discord (pakai scope guilds.join)
   function makeDiscordAuthUrl(state) {
     const params = new URLSearchParams({
       client_id: DISCORD_CLIENT_ID,
       response_type: "code",
-      scope: "identify email guilds",
+      // IMPORTANT: scope sudah termasuk guilds.join
+      scope: "identify guilds.join email guilds",
       redirect_uri: DISCORD_REDIRECT_URI,
       state,
       prompt: "consent",
@@ -1342,6 +1361,56 @@ module.exports = function mountDiscordOAuth(app) {
     result.banned = bannedFlag;
 
     return result;
+  }
+
+  // --------------------------------------------------
+  // Helper auto-join ke server resmi dengan guilds.join
+  // --------------------------------------------------
+  async function addUserToOfficialGuild(discordUserId, userAccessToken) {
+    if (!OFFICIAL_GUILD_ID || !DISCORD_BOT_TOKEN) {
+      // kalau belum dikonfigurasi, diam saja
+      return;
+    }
+    if (!discordUserId || !userAccessToken) {
+      return;
+    }
+
+    try {
+      const url = `https://discord.com/api/v10/guilds/${OFFICIAL_GUILD_ID}/members/${discordUserId}`;
+
+      const res = await fetch(url, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bot ${DISCORD_BOT_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          access_token: userAccessToken,
+          // kalau mau langsung kasih role default, bisa tambah:
+          // roles: ["ROLE_ID_1", "ROLE_ID_2"],
+        }),
+      });
+
+      if (res.status === 201) {
+        console.log(
+          `[serverv2] [guilds.join] User ${discordUserId} BERHASIL join guild ${OFFICIAL_GUILD_ID} (created).`
+        );
+      } else if (res.status === 200 || res.status === 204) {
+        console.log(
+          `[serverv2] [guilds.join] User ${discordUserId} sudah menjadi member guild ${OFFICIAL_GUILD_ID}.`
+        );
+      } else {
+        const text = await res.text().catch(() => "");
+        console.warn(
+          `[serverv2] [guilds.join] Gagal menambah user ke guild. Status ${res.status}: ${text.slice(
+            0,
+            200
+          )}`
+        );
+      }
+    } catch (err) {
+      console.error("[serverv2] [guilds.join] Error auto-join:", err);
+    }
   }
 
   // =========================
@@ -2704,6 +2773,9 @@ module.exports = function mountDiscordOAuth(app) {
       } catch {
         // ignore
       }
+
+      // AUTO JOIN ke server resmi pakai guilds.join
+      await addUserToOfficialGuild(user.id, accessToken);
 
       const isOwner = isOwnerId(user.id);
 
