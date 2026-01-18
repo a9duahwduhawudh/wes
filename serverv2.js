@@ -22,23 +22,18 @@ function resolveExHubApiBase() {
 // Helper: Discord Redirect URI (PROD vs LOCAL)
 // ---------------------------------------------------------
 function resolveDiscordRedirectUri() {
-  // 1) Kalau DISCORD_REDIRECT_URI sudah di-set di .env → pakai itu saja
   if (process.env.DISCORD_REDIRECT_URI) {
     return process.env.DISCORD_REDIRECT_URI;
   }
 
-  // 2) Kalau ada EXHUB_SITE_BASE, pakai sebagai base URL
   const SITE_BASE =
     process.env.EXHUB_SITE_BASE || "https://exc-webs.vercel.app";
   const cleanBase = SITE_BASE.replace(/\/+$/, "");
 
-  // 3) Kalau NODE_ENV=production → default ke domain production
   if (process.env.NODE_ENV === "production") {
-    // Hasil: https://exc-webs.vercel.app/auth/discord/callback
     return `${cleanBase}/auth/discord/callback`;
   }
 
-  // 4) Default fallback untuk lokal development
   return "http://localhost:3000/auth/discord/callback";
 }
 
@@ -53,6 +48,7 @@ const hasFreeKeyKV = !!(KV_REST_API_URL && KV_REST_API_TOKEN);
 const DISCORD_USER_INDEX_KEY = "exhub:discord:userindex";
 
 // Snapshot agregat eksekusi loader (per key/per Discord)
+// Harus sama dengan yang dipakai server.js (/api/exec)
 const EXEC_USERS_KEY = "exhub:exec:users";
 
 async function kvRequest(pathPart) {
@@ -116,7 +112,7 @@ function pad2(n) {
 
 function formatDateLabelMs(ms, offsetHours, suffix) {
   if (!ms || typeof ms !== "number") return null;
-  const d = new Date(ms + offsetHours * 3600000); // pakai UTC + offset
+  const d = new Date(ms + offsetHours * 3600000);
   const y = d.getUTCFullYear();
   const m = pad2(d.getUTCMonth() + 1);
   const day = pad2(d.getUTCDate());
@@ -154,11 +150,9 @@ function parseDateOrTimestamp(value) {
   const str = String(value).trim();
   if (!str) return null;
 
-  // numeric only -> timestamp
   if (/^\d+$/.test(str)) {
     const num = parseInt(str, 10);
     if (Number.isNaN(num)) return null;
-    // Jika kurang dari 1e12, anggap detik -> ms
     if (num < 1e12) return num * 1000;
     return num;
   }
@@ -235,7 +229,7 @@ function normalizeFreeKeyTtlHours(uiCfg) {
 
   let n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) n = FREE_KEY_TTL_DEFAULT_HOURS;
-  if (n > 72) n = 72; // batas aman
+  if (n > 72) n = 72;
   return n;
 }
 
@@ -327,7 +321,7 @@ async function getPaidDurationsMs() {
 // ---------------------------------------------------------
 
 const FREE_KEY_PREFIX = "EXHUBFREE";
-const FREE_KEY_TTL_HOURS = FREE_KEY_TTL_DEFAULT_HOURS; // default, bisa di-override via KV
+const FREE_KEY_TTL_HOURS = FREE_KEY_TTL_DEFAULT_HOURS;
 const FREE_KEY_MAX_PER_USER = 5;
 
 const REQUIRE_FREEKEY_ADS_CHECKPOINT =
@@ -381,7 +375,7 @@ async function createFreeKeyRecordPersistent({ userId, provider, ip }) {
   const rec = {
     token,
     userId: String(userId),
-    provider, // 'workink' atau 'linkvertise'
+    provider,
     createdAt,
     byIp: ip || null,
     linkId: null,
@@ -419,7 +413,6 @@ async function extendFreeKeyPersistent(token) {
   return rec;
 }
 
-// Delete free key + bersihkan index user
 async function deleteFreeKeyPersistent(token, userIdCheck) {
   const key = tokenKey(token);
   const rec = await kvGetJson(key);
@@ -578,7 +571,6 @@ async function setPaidKeyRecord(payload) {
 
   const newOwnerId = rec.ownerDiscordId;
 
-  // Hapus dari index owner lama jika pindah
   if (previousOwnerId && previousOwnerId !== newOwnerId) {
     const oldIdxKey = paidUserIndexKey(previousOwnerId);
     let oldIdx = await kvGetJson(oldIdxKey);
@@ -588,7 +580,6 @@ async function setPaidKeyRecord(payload) {
     }
   }
 
-  // Tambahkan ke index owner baru
   if (newOwnerId) {
     const newIdxKey = paidUserIndexKey(newOwnerId);
     let newIdx = await kvGetJson(newIdxKey);
@@ -602,7 +593,6 @@ async function setPaidKeyRecord(payload) {
   return normalizePaidKeyRecord(rec);
 }
 
-// Paid keys per user – skip yang deleted (hilang dari dashboard & user-info)
 async function getPaidKeysForUserPersistent(discordId) {
   if (!hasFreeKeyKV) return [];
 
@@ -625,7 +615,6 @@ async function getPaidKeysForUserPersistent(discordId) {
         : false;
     const deleted = !!rec.deleted;
 
-    // Jangan tampilkan key yang sudah dihapus (deleted=true)
     if (deleted) {
       continue;
     }
@@ -754,7 +743,7 @@ function makeDiscordBannerUrl(profile) {
 // ---------------------------------------------------------
 //
 // Data diambil dari KV EXEC_USERS_KEY ("exhub:exec:users").
-// Bentuk KV yang disupport (fleksibel):
+// Bentuk KV yang disupport (fleksibel, supaya match dengan server.js /api/exec):
 //
 // 1) Mode byKey:
 //    {
@@ -770,7 +759,6 @@ function makeDiscordBannerUrl(profile) {
 //         "123456789": {
 //            discordId: "123456789",
 //            username: "...",
-//            // ...
 //            keys: {
 //               "EXHUBPAID-XXXX": { ... },
 //               "EXHUBFREE-YYYY": { ... }
@@ -782,20 +770,42 @@ function makeDiscordBannerUrl(profile) {
 // 3) Mode root (langsung token → entry):
 //    {
 //      "EXHUBPAID-XXXX": { ... },
-//      "EXHUBFREE-YYYY": { ... }
+//      "EXHUBFREE-YYYY": { ... },
+//      "updatedAt": 1731231231231
 //    }
 //
-// /api/exec di server.js cukup menulis ke salah satu bentuk ini.
+// 4) Mode array of entries:
+//    [
+//      { keyToken: "EXHUBPAID-XXXX", ... },
+//      { keyToken: "EXHUBFREE-YYYY", ... }
+//    ]
 //
 function normalizeExecStatsFromKeyEntry(keyToken, keyEntry, userContext, discordId) {
   if (!keyEntry || typeof keyEntry !== "object") return null;
-  const uc = userContext && typeof userContext === "object" ? userContext : {};
 
+  const uc =
+    userContext && typeof userContext === "object" ? userContext : {};
+
+  // token/keyToken
+  const kt = String(
+    keyToken ||
+      keyEntry.keyToken ||
+      keyEntry.token ||
+      keyEntry.key ||
+      ""
+  ).trim();
+  if (!kt) return null;
+
+  // Roblox username / displayName
   const username =
     keyEntry.robloxUsername ||
     keyEntry.username ||
+    keyEntry.userName ||
+    keyEntry.playerName ||
     uc.robloxUsername ||
     uc.username ||
+    uc.userName ||
+    uc.playerName ||
     null;
 
   const displayName =
@@ -805,12 +815,17 @@ function normalizeExecStatsFromKeyEntry(keyToken, keyEntry, userContext, discord
     uc.displayName ||
     null;
 
+  // Roblox userId (banyak kemungkinan nama field)
   let userId = null;
   const candIds = [
     keyEntry.robloxUserId,
     keyEntry.userId,
+    keyEntry.robloxId,
+    keyEntry.playerId,
     uc.robloxUserId,
     uc.userId,
+    uc.robloxId,
+    uc.playerId,
   ];
   for (const cid of candIds) {
     if (cid === undefined || cid === null || cid === "") continue;
@@ -821,39 +836,72 @@ function normalizeExecStatsFromKeyEntry(keyToken, keyEntry, userContext, discord
     }
   }
 
-  const hwid = keyEntry.hwid || keyEntry.HWID || uc.hwid || uc.HWID || null;
+  // HWID
+  const hwid =
+    keyEntry.hwid ||
+    keyEntry.HWID ||
+    uc.hwid ||
+    uc.HWID ||
+    null;
+
+  // Executor
   const executorUse =
     keyEntry.executorUse ||
     keyEntry.executor ||
+    keyEntry.executorName ||
     uc.executorUse ||
     uc.executor ||
+    uc.executorName ||
     null;
 
+  // totalExecutes (support banyak alias)
   let totalExecutes = null;
-  if (typeof keyEntry.totalExecutes === "number") {
-    totalExecutes = keyEntry.totalExecutes;
-  } else if (typeof keyEntry.execCount === "number") {
-    totalExecutes = keyEntry.execCount;
-  } else if (typeof uc.totalExecutes === "number") {
-    totalExecutes = uc.totalExecutes;
+  const execCandidates = [
+    keyEntry.totalExecutes,
+    keyEntry.totalExecute,
+    keyEntry.execCount,
+    keyEntry.executeCount,
+    keyEntry.count,
+    uc.totalExecutes,
+    uc.totalExecute,
+    uc.execCount,
+  ];
+  for (const val of execCandidates) {
+    if (typeof val === "number" && Number.isFinite(val)) {
+      totalExecutes = val;
+      break;
+    }
   }
 
+  // IP
   const lastIp =
     keyEntry.lastIp ||
     keyEntry.ip ||
+    keyEntry.lastIP ||
     uc.lastIp ||
     uc.ip ||
+    uc.lastIP ||
     null;
 
+  // Map history / allMapList
   let allMapList = [];
-  if (Array.isArray(keyEntry.allMapList)) {
-    allMapList = keyEntry.allMapList;
-  } else if (Array.isArray(uc.allMapList)) {
-    allMapList = uc.allMapList;
+  const mapCandidates = [
+    keyEntry.allMapList,
+    keyEntry.mapList,
+    keyEntry.maps,
+    keyEntry.mapHistory,
+    keyEntry.mapsHistory,
+    uc.allMapList,
+    uc.mapList,
+    uc.maps,
+    uc.mapHistory,
+  ];
+  for (const m of mapCandidates) {
+    if (Array.isArray(m) && m.length) {
+      allMapList = m;
+      break;
+    }
   }
-
-  const kt = String(keyToken || "").trim();
-  if (!kt) return null;
 
   return {
     keyToken: kt,
@@ -881,11 +929,12 @@ async function loadExecIndexByToken() {
   }
 
   const index = {};
-  if (!snap || typeof snap !== "object") return index;
+  if (!snap) return index;
 
-  // Mode 1: byKey langsung
+  // ===== MODE 1: explicit "byKey" =====
   if (snap.byKey && typeof snap.byKey === "object") {
     for (const [token, raw] of Object.entries(snap.byKey)) {
+      if (!raw || typeof raw !== "object") continue;
       const es = normalizeExecStatsFromKeyEntry(
         token,
         raw,
@@ -898,7 +947,7 @@ async function loadExecIndexByToken() {
     }
   }
 
-  // Mode 2: per Discord user, lalu per key di bawahnya
+  // ===== MODE 2: per Discord user (users[discordId].keys[token]) =====
   const usersObj =
     (snap.users && typeof snap.users === "object" && snap.users) ||
     (snap.byDiscordId &&
@@ -917,6 +966,7 @@ async function loadExecIndexByToken() {
       if (!keysObj) continue;
 
       for (const [token, keyEntry] of Object.entries(keysObj)) {
+        if (!keyEntry || typeof keyEntry !== "object") continue;
         const es = normalizeExecStatsFromKeyEntry(
           token,
           keyEntry,
@@ -928,7 +978,6 @@ async function loadExecIndexByToken() {
         if (!index[canon]) {
           index[canon] = es;
         } else {
-          // Merge sederhana: pilih totalExecutes terbesar, ip & mapList terbaru
           const prev = index[canon];
           const merged = Object.assign({}, prev);
 
@@ -953,20 +1002,96 @@ async function loadExecIndexByToken() {
     }
   }
 
-  // Mode 3: token langsung di root (skip key khusus)
-  for (const [token, raw] of Object.entries(snap)) {
-    if (token === "byKey" || token === "users" || token === "byDiscordId")
-      continue;
-    if (!raw || typeof raw !== "object") continue;
-    const es = normalizeExecStatsFromKeyEntry(
-      token,
-      raw,
-      raw,
-      raw.discordId || raw.ownerDiscordId || null
-    );
-    if (!es) continue;
-    const canon = es.keyToken.toUpperCase();
-    if (!index[canon]) index[canon] = es;
+  // ===== MODE 3: flat object di root (token → entry) =====
+  if (snap && typeof snap === "object" && !Array.isArray(snap)) {
+    const reserved = new Set([
+      "byKey",
+      "users",
+      "byDiscordId",
+      "meta",
+      "updatedAt",
+    ]);
+
+    for (const [token, raw] of Object.entries(snap)) {
+      if (reserved.has(token)) continue;
+      if (!raw || typeof raw !== "object") continue;
+
+      const es = normalizeExecStatsFromKeyEntry(
+        token,
+        raw,
+        raw,
+        raw.discordId || raw.ownerDiscordId || null
+      );
+      if (!es) continue;
+
+      const canon = es.keyToken.toUpperCase();
+      if (!index[canon]) {
+        index[canon] = es;
+      } else {
+        const prev = index[canon];
+        const merged = Object.assign({}, prev);
+
+        if (
+          typeof es.totalExecutes === "number" &&
+          (typeof prev.totalExecutes !== "number" ||
+            es.totalExecutes > prev.totalExecutes)
+        ) {
+          merged.totalExecutes = es.totalExecutes;
+        }
+        if (es.lastIp && !prev.lastIp) {
+          merged.lastIp = es.lastIp;
+          merged.ip = es.lastIp;
+        }
+        if (Array.isArray(es.allMapList) && es.allMapList.length) {
+          merged.allMapList = es.allMapList;
+        }
+
+        index[canon] = merged;
+      }
+    }
+  }
+
+  // ===== MODE 4: array of entries [{ keyToken, ... }, ...] =====
+  if (Array.isArray(snap)) {
+    for (const entry of snap) {
+      if (!entry || typeof entry !== "object") continue;
+      const token =
+        entry.keyToken || entry.token || entry.key || entry.keyId;
+      if (!token) continue;
+
+      const es = normalizeExecStatsFromKeyEntry(
+        token,
+        entry,
+        entry,
+        entry.discordId || entry.ownerDiscordId || null
+      );
+      if (!es) continue;
+
+      const canon = es.keyToken.toUpperCase();
+      if (!index[canon]) {
+        index[canon] = es;
+      } else {
+        const prev = index[canon];
+        const merged = Object.assign({}, prev);
+
+        if (
+          typeof es.totalExecutes === "number" &&
+          (typeof prev.totalExecutes !== "number" ||
+            es.totalExecutes > prev.totalExecutes)
+        ) {
+          merged.totalExecutes = es.totalExecutes;
+        }
+        if (es.lastIp && !prev.lastIp) {
+          merged.lastIp = es.lastIp;
+          merged.ip = es.lastIp;
+        }
+        if (Array.isArray(es.allMapList) && es.allMapList.length) {
+          merged.allMapList = es.allMapList;
+        }
+
+        index[canon] = merged;
+      }
+    }
   }
 
   return index;
@@ -1108,7 +1233,6 @@ function normalizeFreeKeyForAdmin(fk, discordId) {
 // ---------------------------------------------------------
 // Helper: Ads / checkpoint state di session (per provider)
 // ---------------------------------------------------------
-
 function canonicalAdsProvider(raw) {
   const v = String(raw || "").toLowerCase();
   if (v === "linkvertise" || v === "linkvertise.com") return "linkvertise";
@@ -1157,7 +1281,6 @@ module.exports = function mountDiscordOAuth(app) {
   const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
   const DISCORD_REDIRECT_URI = resolveDiscordRedirectUri();
 
-  // EXHUB_API_BASE: saat ini tidak kita pakai untuk user-info HTTP
   const EXHUB_API_BASE = resolveExHubApiBase();
 
   const WORKINK_ADS_URL =
@@ -1166,7 +1289,6 @@ module.exports = function mountDiscordOAuth(app) {
     process.env.LINKVERTISE_ADS_URL ||
     "https://link-target.net/2995260/uaE3u7P8CG5D";
 
-  // OWNER IDs masih boleh diisi untuk "badge" saja, TIDAK untuk login admin
   const RAW_OWNER_IDS =
     process.env.OWNER_IDS ||
     process.env.OWNER_ID ||
@@ -1196,9 +1318,6 @@ module.exports = function mountDiscordOAuth(app) {
     );
   }
 
-  // =========================
-  // HELPER SESSION ADMIN
-  // =========================
   function isAdminSession(req) {
     return !!(
       req.session &&
@@ -1206,9 +1325,6 @@ module.exports = function mountDiscordOAuth(app) {
     );
   }
 
-  // =========================
-  // MIDDLEWARE: res.locals.user & res.locals.isAdmin
-  // =========================
   app.use((req, res, next) => {
     const user = (req.session && req.session.discordUser) || null;
     res.locals.user = user;
@@ -1218,15 +1334,10 @@ module.exports = function mountDiscordOAuth(app) {
     next();
   });
 
-  // =========================
-  // HELPER AUTH & ADS PROVIDER RESOLVER
-  // =========================
-
   function makeDiscordAuthUrl(state) {
     const params = new URLSearchParams({
       client_id: DISCORD_CLIENT_ID,
       response_type: "code",
-      // scope match dengan: identify+email+guilds
       scope: "identify email guilds",
       redirect_uri: DISCORD_REDIRECT_URI,
       state,
@@ -1236,29 +1347,24 @@ module.exports = function mountDiscordOAuth(app) {
     return `https://discord.com/oauth2/authorize?${params.toString()}`;
   }
 
-  // Resolver ads provider (dipakai GET /getfreekey, POST generate, POST extend)
   function resolveAdsProviderForRequest(req) {
     const rawAdsParam =
       typeof req.query.ads === "string" ? req.query.ads : "";
 
     let adsProvider;
     if (rawAdsParam) {
-      // Ada ?ads → pakai & simpan ke session
       adsProvider = canonicalAdsProvider(rawAdsParam);
       if (req.session) {
         req.session.lastFreeKeyAdsProvider = adsProvider;
       }
     } else if (req.session && req.session.lastFreeKeyAdsProvider) {
-      // Tidak ada ?ads, pakai provider terakhir dari session
       adsProvider = canonicalAdsProvider(req.session.lastFreeKeyAdsProvider);
     } else {
-      // Default awal kalau belum ada riwayat
       adsProvider = "workink";
     }
     return adsProvider;
   }
 
-  // Wajib login Discord untuk fitur user (dashboard, get key, dll)
   function requireAuth(req, res, next) {
     if (!req.session || !req.session.discordUser) {
       return res.redirect("/login-required");
@@ -1266,7 +1372,6 @@ module.exports = function mountDiscordOAuth(app) {
     next();
   }
 
-  // Wajib session admin (ADMIN_USER / ADMIN_PASS) untuk fitur admin
   function requireAdmin(req, res, next) {
     if (!isAdminSession(req)) {
       return res.status(403).send("Forbidden: Admin only");
@@ -1274,7 +1379,6 @@ module.exports = function mountDiscordOAuth(app) {
     next();
   }
 
-  // Ambil data key user untuk Dashboard (web) → langsung dari KV
   async function getUserKeys(discordUser) {
     const result = {
       total: 0,
@@ -1357,7 +1461,7 @@ module.exports = function mountDiscordOAuth(app) {
   });
 
   // =========================
-  // ROUTES – DASHBOARD & PAGE WAJIB LOGIN (USER DISCORD)
+  // ROUTES – DASHBOARD & PAGE WAJIB LOGIN
   // =========================
 
   app.get("/dashboard", requireAuth, async (req, res) => {
@@ -1372,7 +1476,7 @@ module.exports = function mountDiscordOAuth(app) {
   });
 
   // --------------------------------------------------
-  // GET /getfreekey – halaman utama get free key
+  // GET /getfreekey
   // --------------------------------------------------
   app.get("/getfreekey", requireAuth, async (req, res) => {
     const discordUser = req.session.discordUser;
@@ -1380,13 +1484,9 @@ module.exports = function mountDiscordOAuth(app) {
 
     const doneFlag = String(req.query.done || "") === "1";
 
-    // Global config (UI + TTL)
     const { freeKeyUiConfig, freeKeyTtlHours } = await loadGlobalKeyConfig();
-
-    // Cek banned
     const bannedFlag = await isDiscordUserBanned(userId);
 
-    // Gunakan resolver umum (query.ads + session.lastFreeKeyAdsProvider)
     const adsProvider = resolveAdsProviderForRequest(req);
 
     if (doneFlag && req.session) {
@@ -1428,7 +1528,6 @@ module.exports = function mountDiscordOAuth(app) {
       keys.length > 0 &&
       (!REQUIRE_FREEKEY_ADS_CHECKPOINT || (adsProgressDone && !adsUsed));
 
-    // Jika banned → tidak boleh generate / renew
     if (bannedFlag) {
       allowGenerate = false;
       canRenew = false;
@@ -1455,9 +1554,7 @@ module.exports = function mountDiscordOAuth(app) {
       keyAction: "/getfreekey/generate",
       renewAction: "/getfreekey/extend",
       errorMessage,
-      // penting: dikirim dengan nama yang dipakai EJS
       isBannedAccount: bannedFlag,
-      // tetap kirim juga 'banned' kalau nanti dibutuhkan template lain
       banned: bannedFlag,
       freeKeyUiConfig,
       freeKeyTtlHours,
@@ -1471,11 +1568,9 @@ module.exports = function mountDiscordOAuth(app) {
     const discordUser = req.session.discordUser;
     const userId = discordUser.id;
 
-    // Provider di-resolve sama seperti GET /getfreekey
     const adsProvider = resolveAdsProviderForRequest(req);
     const redirectBase = "/getfreekey?ads=" + encodeURIComponent(adsProvider);
 
-    // Cek banned
     const bannedFlag = await isDiscordUserBanned(userId);
     if (bannedFlag) {
       return res.redirect(
@@ -1516,7 +1611,7 @@ module.exports = function mountDiscordOAuth(app) {
       const ip = String(ipHeader).split(",")[0].trim();
       await createFreeKeyRecordPersistent({
         userId,
-        provider: adsProvider, // 'workink' atau 'linkvertise'
+        provider: adsProvider,
         ip,
       });
 
@@ -1534,7 +1629,7 @@ module.exports = function mountDiscordOAuth(app) {
   });
 
   // --------------------------------------------------
-  // POST /getfreekey/extend – Renew free key
+  // POST /getfreekey/extend
   // --------------------------------------------------
   app.post("/getfreekey/extend", requireAuth, async (req, res) => {
     const discordUser = req.session.discordUser;
@@ -1553,7 +1648,6 @@ module.exports = function mountDiscordOAuth(app) {
       );
     }
 
-    // Cek banned
     const bannedFlag = await isDiscordUserBanned(userId);
     if (bannedFlag) {
       return res.redirect(
@@ -1786,8 +1880,6 @@ module.exports = function mountDiscordOAuth(app) {
 
   // --------------------------------------------------
   // API: POST /api/paidfree/user-info
-  //
-  // INI yang akan dipanggil bot (EXHUB_USERINFO_URL).
   // --------------------------------------------------
   app.post("/api/paidfree/user-info", async (req, res) => {
     const body = req.body || {};
@@ -1955,15 +2047,11 @@ module.exports = function mountDiscordOAuth(app) {
       profile: profile || null,
       paidKeys,
       freeKeys,
-      keys: allKeys, // <-- dicek bot
+      keys: allKeys,
       summary,
     });
   });
 
-  // --------------------------------------------------
-  // API kecil: GET /api/discord/owners
-  // (hanya info, tidak dipakai untuk login admin)
-  // --------------------------------------------------
   app.get("/api/discord/owners", (req, res) => {
     res.json({ ownerIds: OWNER_IDS });
   });
@@ -2013,7 +2101,7 @@ module.exports = function mountDiscordOAuth(app) {
       discordIds = [];
     }
 
-    // Load sekali index eksekusi per key (token -> execStats)
+    // Load index eksekusi per key sekali
     let execIndexByToken = {};
     if (hasFreeKeyKV) {
       try {
@@ -2057,7 +2145,6 @@ module.exports = function mountDiscordOAuth(app) {
 
         const baseKeysAll = normalizedPaid.concat(normalizedFree);
 
-        // Inject execStats ke setiap key berdasarkan token
         const keysAll = baseKeysAll.map((k) => {
           const token = k.token || k.key;
           if (!token) return k;
@@ -2155,7 +2242,6 @@ module.exports = function mountDiscordOAuth(app) {
 
     const totalDiscordUsers = perUserData.length;
 
-    // Build userStats untuk tabel overview
     let userStats = perUserData.map((d) => ({
       discordId: d.discordId,
       username: d.username,
@@ -2177,7 +2263,6 @@ module.exports = function mountDiscordOAuth(app) {
       banned: d.banned,
     }));
 
-    // Filter search
     if (query) {
       const qLower = query.toLowerCase();
       userStats = userStats.filter((row) => {
@@ -2195,7 +2280,6 @@ module.exports = function mountDiscordOAuth(app) {
       });
     }
 
-    // Filter status
     let filteredIds = userStats.map((u) => u.discordId);
     if (filter === "hasKeys") {
       userStats = userStats.filter((u) => (u.totalKeys || 0) > 0);
@@ -2208,7 +2292,6 @@ module.exports = function mountDiscordOAuth(app) {
     }
     filteredIds = userStats.map((u) => u.discordId);
 
-    // Tentukan selectedUser
     let selectedUserId = null;
     if (selectedUserParam && filteredIds.includes(selectedUserParam)) {
       selectedUserId = selectedUserParam;
@@ -2263,7 +2346,6 @@ module.exports = function mountDiscordOAuth(app) {
     });
   });
 
-  // Simpan global config (UI Get Free Key + TTL)
   app.post(
     "/admin/discord/save-global-key-config",
     requireAdmin,
@@ -2324,7 +2406,6 @@ module.exports = function mountDiscordOAuth(app) {
           kvSetJson(PAID_PLAN_CONFIG_KEY, paidPlanConfig),
         ]);
 
-        // update cache in-memory
         cachedFreeKeyUiConfig = freeKeyUiConfig;
         cachedPaidPlanConfig = paidPlanConfig;
         cachedGlobalConfigLoadedAt = nowMs();
@@ -2339,7 +2420,6 @@ module.exports = function mountDiscordOAuth(app) {
     }
   );
 
-  // Ban user
   app.post("/admin/discord/ban-user", requireAdmin, async (req, res) => {
     const discordId = (req.body.discordId || "").trim();
     if (!discordId) {
@@ -2355,7 +2435,6 @@ module.exports = function mountDiscordOAuth(app) {
     res.redirect("/admin/discord?user=" + encodeURIComponent(discordId));
   });
 
-  // Unban user
   app.post("/admin/discord/unban-user", requireAdmin, async (req, res) => {
     const discordId = (req.body.discordId || "").trim();
     if (!discordId) {
@@ -2371,7 +2450,6 @@ module.exports = function mountDiscordOAuth(app) {
     res.redirect("/admin/discord?user=" + encodeURIComponent(discordId));
   });
 
-  // Delete semua key user
   app.post(
     "/admin/discord/delete-user-keys",
     requireAdmin,
@@ -2382,7 +2460,6 @@ module.exports = function mountDiscordOAuth(app) {
       }
 
       try {
-        // Free keys
         const freeIdxKey = userIndexKey(discordId);
         const freeTokens = await kvGetJson(freeIdxKey);
         if (Array.isArray(freeTokens)) {
@@ -2398,11 +2475,9 @@ module.exports = function mountDiscordOAuth(app) {
               );
             }
           }
-          // kosongkan index (walaupun deleteFreeKeyPersistent sudah bersihkan)
           await kvSetJson(freeIdxKey, []);
         }
 
-        // Paid keys
         const paidIdxKey = paidUserIndexKey(discordId);
         const paidTokens = await kvGetJson(paidIdxKey);
         if (Array.isArray(paidTokens)) {
@@ -2439,12 +2514,11 @@ module.exports = function mountDiscordOAuth(app) {
     }
   );
 
-  // Update 1 key (createdAt + time left TTL)
   app.post("/admin/discord/update-key", requireAdmin, async (req, res) => {
     const discordId = (req.body.discordId || "").trim();
     const token = (req.body.token || "").trim();
     const createdAtRaw = req.body.createdAt;
-    const expiresTTLRaw = req.body.expiresAt; // HH:MM:SS
+    const expiresTTLRaw = req.body.expiresAt;
 
     if (!discordId || !token) {
       return res.redirect("/admin/discord");
@@ -2511,7 +2585,6 @@ module.exports = function mountDiscordOAuth(app) {
     res.redirect(redirectUrl);
   });
 
-  // Renew 1 key (extend expiry)
   app.post("/admin/discord/renew-key", requireAdmin, async (req, res) => {
     const discordId = (req.body.discordId || "").trim();
     const token = (req.body.token || "").trim();
@@ -2569,7 +2642,6 @@ module.exports = function mountDiscordOAuth(app) {
     res.redirect(redirectUrl);
   });
 
-  // Delete 1 key (paid / free) untuk 1 user di admin-dashboarddiscord
   app.post("/admin/discord/delete-key", requireAdmin, async (req, res) => {
     const discordId = (req.body.discordId || "").trim();
     const token = (req.body.token || "").trim();
@@ -2582,7 +2654,6 @@ module.exports = function mountDiscordOAuth(app) {
       "/admin/discord?user=" + encodeURIComponent(discordId);
 
     try {
-      // 1) Paid key: tandai deleted + invalid + bersihkan index paid
       let paidRec = await getPaidKeyRecord(token);
       if (paidRec) {
         await setPaidKeyRecord({
@@ -2611,7 +2682,6 @@ module.exports = function mountDiscordOAuth(app) {
         }
       }
 
-      // 2) Free key: delete + bersihkan index via deleteFreeKeyPersistent
       const freeRec = await kvGetJson(tokenKey(token));
       if (freeRec && String(freeRec.userId) === String(discordId)) {
         await deleteFreeKeyPersistent(token, discordId);
@@ -2727,10 +2797,10 @@ module.exports = function mountDiscordOAuth(app) {
           if (Array.isArray(guilds)) guildCount = guilds.length;
         }
       } catch {
-        // tidak fatal
+        // ignore
       }
 
-      const isOwner = isOwnerId(user.id); // hanya untuk badge, bukan login admin
+      const isOwner = isOwnerId(user.id);
 
       req.session.discordUser = {
         id: user.id,
