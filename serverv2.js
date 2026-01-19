@@ -199,6 +199,120 @@ function parseHHMMSS(value) {
 }
 
 // ---------------------------------------------------------
+// Helper khusus NEW UPDATE SC (Discord embed builder)
+// ---------------------------------------------------------
+
+function splitScriptUpdateList(text) {
+  if (!text) return [];
+  return String(text)
+    .split(/[\n;]+/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function formatDateTimeWIBSimple(date) {
+  const d = date ? new Date(date) : new Date();
+  try {
+    const dtf = new Intl.DateTimeFormat("id-ID", {
+      timeZone: "Asia/Jakarta",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    const parts = dtf.formatToParts(d);
+    const get = (type) =>
+      (parts.find((p) => p.type === type) || {}).value || "";
+    const day = get("day");
+    const month = get("month");
+    const year = get("year");
+    const hour = get("hour");
+    const minute = get("minute");
+    return `Today ${day}-${month}-${year} ${hour}:${minute} WIB`;
+  } catch (e) {
+    // fallback jika Intl/timezone tidak tersedia
+    const day = pad2(d.getUTCDate());
+    const month = pad2(d.getUTCMonth() + 1);
+    const year = d.getUTCFullYear();
+    const hour = pad2(d.getUTCHours());
+    const minute = pad2(d.getUTCMinutes());
+    return `Today ${day}-${month}-${year} ${hour}:${minute} WIB`;
+  }
+}
+
+/**
+ * Build payload embed NEW UPDATE SC untuk Discord API
+ * options:
+ *   - scriptName
+ *   - status
+ *   - features
+ *   - changeLogs
+ *   - nextUpdate
+ *   - mention
+ */
+function buildScriptUpdateEmbedPayload(options) {
+  const scriptName = options.scriptName || "UNKNOWN";
+  const status = (options.status || "WORKING").toUpperCase();
+  const featuresList = splitScriptUpdateList(options.features || "");
+  const changeLogsList = splitScriptUpdateList(options.changeLogs || "");
+  let nextUpdateList = splitScriptUpdateList(options.nextUpdate || "");
+  if (!nextUpdateList.length) {
+    nextUpdateList = ["-"];
+  }
+
+  const featureLines =
+    featuresList.length > 0
+      ? featuresList.map((f) => `[✅] ${f}`)
+      : ["(no features listed)"];
+  const changelogLines =
+    changeLogsList.length > 0 ? changeLogsList.map((c) => `[+] ${c}`) : ["-"];
+  const nextUpdateText = nextUpdateList.join("\n");
+
+  const headerEmoji = ":green_circle:";
+
+  const lines = [
+    `${headerEmoji} **NEW UPDATE SC**`,
+    "",
+    `[SCRIPT]: ${scriptName}`,
+    `[STATUS]: ${status}`,
+    "",
+    "ℹ️ **FEATURES**",
+    ...featureLines,
+    "",
+    "ℹ️ **CHANGE LOGS**",
+    ...changelogLines,
+    "",
+    ":hourglass_flowing_sand: **NEXT UPDATE**",
+    nextUpdateText,
+  ];
+
+  const description = lines.join("\n");
+
+  const footerText = `ExHub | ${formatDateTimeWIBSimple()}`;
+
+  const embed = {
+    description,
+    color: 0x2b2d31,
+    footer: {
+      text: footerText,
+      icon_url: "https://exc-webs.vercel.app/img/ExLogo2.png",
+    },
+  };
+
+  const mention =
+    typeof options.mention === "string" && options.mention.trim()
+      ? options.mention.trim()
+      : "@everyone";
+
+  return {
+    content: mention,
+    embeds: [embed],
+  };
+}
+
+// ---------------------------------------------------------
 // Global config (UI Get Free Key + TTL free & paid) via KV
 // ---------------------------------------------------------
 
@@ -750,6 +864,23 @@ function makeDiscordBannerUrl(profile) {
 // ---------------------------------------------------------
 // Exec tracking helpers (User Exec Detail /admin/discord)
 // ---------------------------------------------------------
+//
+// Data diambil dari KV yang juga dipakai server.js /api/exec
+//
+// Format baru (utama):
+//   - SMEMBERS exhub:exec-users:index  -> ["entryKey1","entryKey2",...]
+//   - GET exhub:exec-user:<entryKey>   -> JSON per kombinasi scriptId/userId/hwid
+//
+// Fallback legacy (lama):
+//   - GET exhub:exec-users -> JSON array [ entry, entry, ... ]
+//
+// Output akhir: indexByToken = {
+//   "EXHUBPAID-XXXX": {
+//      keyToken, username, displayName, userId,
+//      hwid, executorUse, totalExecutes,
+//      lastIp, ip, allMapList[], discordId
+//   }, ...
+// }
 async function kvExecGetRaw(key) {
   return kvRequest(kvPath("GET", key));
 }
@@ -1181,11 +1312,18 @@ module.exports = function mountDiscordOAuth(app) {
     "";
   const OWNER_IDS = RAW_OWNER_IDS.split(/[,\s]+/).filter(Boolean);
 
-  // Guild & Bot token untuk auto-join (guilds.join)
+  // Guild & Bot token untuk auto-join (guilds.join) dan kirim message
   const OFFICIAL_GUILD_ID =
     process.env.OFFICIAL_GUILD_ID || process.env.GUILD_ID || null;
   const DISCORD_BOT_TOKEN =
     process.env.DISCORD_TOKEN || process.env.BOT_TOKEN || null;
+
+  // Channel & role default untuk NEW UPDATE SC
+  const UPDATE_CHANNEL_ID = process.env.UPDATE_CHANNEL_ID || null;
+  const UPDATE_EVERYONE_ROLE_ID =
+    process.env.EVERYONE_ROLE_ID ||
+    process.env.UPDATE_EVERYONE_ROLE_ID ||
+    null;
 
   function isOwnerId(id) {
     return OWNER_IDS.includes(String(id));
@@ -1242,7 +1380,7 @@ module.exports = function mountDiscordOAuth(app) {
     const params = new URLSearchParams({
       client_id: DISCORD_CLIENT_ID,
       response_type: "code",
-      // scope sudah termasuk guilds.join + email
+      // IMPORTANT: scope sudah termasuk guilds.join
       scope: "identify guilds.join email guilds",
       redirect_uri: DISCORD_REDIRECT_URI,
       state,
@@ -1351,6 +1489,7 @@ module.exports = function mountDiscordOAuth(app) {
   // --------------------------------------------------
   async function addUserToOfficialGuild(discordUserId, userAccessToken) {
     if (!OFFICIAL_GUILD_ID || !DISCORD_BOT_TOKEN) {
+      // kalau belum dikonfigurasi, diam saja
       return;
     }
     if (!discordUserId || !userAccessToken) {
@@ -1368,6 +1507,7 @@ module.exports = function mountDiscordOAuth(app) {
         },
         body: JSON.stringify({
           access_token: userAccessToken,
+          // kalau mau langsung kasih role default, bisa tambah:
           // roles: ["ROLE_ID_1", "ROLE_ID_2"],
         }),
       });
@@ -2059,6 +2199,8 @@ module.exports = function mountDiscordOAuth(app) {
     if (hasFreeKeyKV) {
       try {
         execIndexByToken = await loadExecIndexByToken();
+        // optional: debug size
+        // console.log("[serverv2] execIndexByToken size:", Object.keys(execIndexByToken).length);
       } catch (err) {
         console.error("[serverv2] loadExecIndexByToken error:", err);
         execIndexByToken = {};
@@ -2646,11 +2788,116 @@ module.exports = function mountDiscordOAuth(app) {
     res.redirect(redirectUrl);
   });
 
+  // --------------------------------------------------
+  // ADMIN – KIRIM NEW UPDATE SC KE DISCORD
+  // --------------------------------------------------
+  app.post(
+    "/admin/discord/send-update-sc",
+    requireAdmin,
+    async (req, res) => {
+      const body = req.body || {};
+
+      const scriptName =
+        (body.scriptName || body.script || "").trim() || "UNKNOWN";
+      const status = (body.status || "").trim() || "WORKING";
+      const features = (body.features || "").trim();
+      const changeLogs =
+        (body.changeLogs || body.changelogs || "").trim();
+      const nextUpdate = (body.nextUpdate || "").trim();
+
+      const channelIdRaw =
+        (body.channelId || body.channel || "").trim() || "";
+      const channelId = channelIdRaw || UPDATE_CHANNEL_ID;
+
+      const redirectTarget = "/admin/discord";
+
+      if (!DISCORD_BOT_TOKEN) {
+        console.error(
+          "[serverv2] send-update-sc: DISCORD_BOT_TOKEN tidak diset."
+        );
+        return res.redirect(
+          redirectTarget +
+            "?error=" +
+            encodeURIComponent("Bot token belum dikonfigurasi.")
+        );
+      }
+
+      if (!channelId) {
+        console.error(
+          "[serverv2] send-update-sc: Channel ID tidak diset (body.channel/channelId atau UPDATE_CHANNEL_ID)."
+        );
+        return res.redirect(
+          redirectTarget +
+            "?error=" +
+            encodeURIComponent("Channel tujuan belum dikonfigurasi.")
+        );
+      }
+
+      const mention =
+        UPDATE_EVERYONE_ROLE_ID &&
+        /^\d{5,}$/.test(String(UPDATE_EVERYONE_ROLE_ID))
+          ? `<@&${UPDATE_EVERYONE_ROLE_ID}>`
+          : "@everyone";
+
+      const payload = buildScriptUpdateEmbedPayload({
+        scriptName,
+        status,
+        features,
+        changeLogs,
+        nextUpdate,
+        mention,
+      });
+
+      try {
+        const url = `https://discord.com/api/v10/channels/${channelId}/messages`;
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bot ${DISCORD_BOT_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => "");
+          console.error(
+            "[serverv2] send-update-sc: Gagal kirim pesan ke Discord:",
+            resp.status,
+            text.slice(0, 200)
+          );
+          return res.redirect(
+            redirectTarget +
+              "?error=" +
+              encodeURIComponent("Gagal mengirim pesan ke Discord.")
+          );
+        }
+
+        console.log(
+          "[serverv2] send-update-sc: Berhasil kirim NEW UPDATE SC ke channel",
+          channelId
+        );
+
+        return res.redirect(
+          redirectTarget +
+            "?sent=1&script=" +
+            encodeURIComponent(scriptName)
+        );
+      } catch (err) {
+        console.error("[serverv2] send-update-sc: error fetch Discord:", err);
+        return res.redirect(
+          redirectTarget +
+            "?error=" +
+            encodeURIComponent("Internal error saat kirim ke Discord.")
+        );
+      }
+    }
+  );
+
   // =========================
   // ROUTES – DISCORD OAUTH2
   // =========================
 
-  // Endpoint baru utama
   app.get("/auth/discord", (req, res) => {
     const state = crypto.randomBytes(16).toString("hex");
     if (req.session) {
@@ -2658,11 +2905,6 @@ module.exports = function mountDiscordOAuth(app) {
     }
     const url = makeDiscordAuthUrl(state);
     res.redirect(url);
-  });
-
-  // Alias: /auth/login lama redirect ke /auth/discord
-  app.get("/auth/login", (req, res) => {
-    res.redirect("/auth/discord");
   });
 
   app.get("/auth/discord/callback", async (req, res) => {
@@ -2820,6 +3062,6 @@ module.exports = function mountDiscordOAuth(app) {
   });
 
   console.log(
-    "[serverv2] Discord OAuth + Dashboard + GetFreeKey + FreeKey API + PaidKey API + PaidFree User-Info API + Admin Discord Dashboard routes mounted (admin via session)."
+    "[serverv2] Discord OAuth + Dashboard + GetFreeKey + FreeKey API + PaidKey API + PaidFree User-Info API + Admin Discord Dashboard + NEW UPDATE SC routes mounted (admin via session)."
   );
 };
