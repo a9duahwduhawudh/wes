@@ -405,6 +405,156 @@
           </form>
         </section>
 
+        <!-- ========== SCRIPT UPDATE BROADCAST (NEW UPDATE SC) ========== -->
+        <section class="card admin-card-script-update" style="margin-bottom:18px;">
+          <div class="card-header">
+            <div class="card-header-main">
+              <h2 class="section-title small">Script Update Broadcast (NEW UPDATE SC)</h2>
+              <p class="card-description">
+                Kirim pengumuman <strong>NEW UPDATE SC</strong> langsung ke Discord
+                menggunakan format standar:
+                <code>[SCRIPT]</code>, <code>[STATUS]</code>, <strong>FEATURES</strong>,
+                <strong>CHANGE LOGS</strong>, dan <strong>NEXT UPDATE</strong>.
+                Pesan ini akan dikirim ke channel yang dikonfigurasi di backend
+                (<code>UPDATE_CHANNEL_ID</code> / setelan di <code>serverv2.js</code>).
+              </p>
+            </div>
+          </div>
+
+          <form
+            action="/admin/discord/send-update-sc"
+            method="POST"
+            class="admin-script-update-form"
+            autocomplete="off"
+          >
+            <div
+              class="admin-global-grid"
+              style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;"
+            >
+              <!-- KOLUM 1: IDENTITAS SCRIPT -->
+              <div>
+                <h3 class="section-title xsmall">Script &amp; Status</h3>
+
+                <div class="admin-key-field" style="margin-top:8px;">
+                  <div class="table-sub-text">
+                    Nama Script
+                    <span class="table-sub-text" style="display:block;">
+                      Contoh: <code>SPEAR FISHING</code>, <code>INDO HANGOUT</code>, dsb.
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    name="scriptName"
+                    class="key-input key-input-sm"
+                    placeholder="SPEAR FISHING"
+                    required
+                    autocomplete="off"
+                  />
+                </div>
+
+                <div class="admin-key-field" style="margin-top:8px;">
+                  <div class="table-sub-text">
+                    Status Script
+                    <span class="table-sub-text" style="display:block;">
+                      Digunakan untuk field <code>[STATUS]</code>.
+                    </span>
+                  </div>
+                  <select
+                    name="status"
+                    class="key-select key-input-sm"
+                    required
+                  >
+                    <option value="WORKING" selected>WORKING</option>
+                    <option value="ONLINE">ONLINE</option>
+                    <option value="OFFLINE">OFFLINE</option>
+                    <option value="OUTDATED (BISA DIPAKE)">OUTDATED (BISA DIPAKE)</option>
+                  </select>
+                </div>
+
+                <div class="admin-key-field" style="margin-top:10px;">
+                  <div class="table-sub-text">
+                    Next Update (opsional)
+                    <span class="table-sub-text" style="display:block;">
+                      Contoh: <code>-</code> atau rencana update berikutnya.
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    name="nextUpdate"
+                    class="key-input key-input-sm"
+                    placeholder="-"
+                    autocomplete="off"
+                  />
+                </div>
+
+                <div class="admin-key-field" style="margin-top:10px;">
+                  <div class="table-sub-text">
+                    Catatan
+                  </div>
+                  <div class="table-sub-text">
+                    Konten final akan diprefix dengan
+                    <code>:green_circle: NEW UPDATE SC</code>, mention role
+                    (<code>@everyone</code> atau role khusus), dan footer waktu
+                    <strong>WITA</strong>.
+                  </div>
+                </div>
+              </div>
+
+              <!-- KOLUM 2: FEATURES & CHANGE LOGS -->
+              <div>
+                <h3 class="section-title xsmall">Features &amp; Change Logs</h3>
+
+                <div class="admin-key-field" style="margin-top:8px;">
+                  <div class="table-sub-text">
+                    FEATURES
+                    <span class="table-sub-text" style="display:block;">
+                      Pisahkan setiap fitur dengan <strong>enter</strong> atau tanda
+                      <code>;</code>. Setiap baris akan muncul sebagai
+                      <code>[✅] ...</code>
+                    </span>
+                  </div>
+                  <textarea
+                    name="features"
+                    class="key-input key-input-sm"
+                    rows="5"
+                    style="resize:vertical;"
+                    placeholder="Automatically farms fish;&#10;Supports both Harpoon and Gun;&#10;Adjustable Shooting Range;&#10;Farm Delay;&#10;Auto Farm Chest/Gems Boss"
+                    required
+                  ></textarea>
+                </div>
+
+                <div class="admin-key-field" style="margin-top:10px;">
+                  <div class="table-sub-text">
+                    CHANGE LOGS
+                    <span class="table-sub-text" style="display:block;">
+                      Pisahkan setiap perubahan dengan <strong>enter</strong> atau tanda
+                      <code>;</code>. Setiap baris akan muncul sebagai
+                      <code>[+]</code>.
+                    </span>
+                  </div>
+                  <textarea
+                    name="changelogs"
+                    class="key-input key-input-sm"
+                    rows="4"
+                    style="resize:vertical;"
+                    placeholder="ADDED HIDE NICKNAME;&#10;ADDED SPAWN AUTO TELE MEGA ZONE;&#10;ADDED LOW GRAPHIC, AFK GRAPHIC FOR REDUCE LAG"
+                    required
+                  ></textarea>
+                </div>
+              </div>
+            </div>
+
+            <div class="admin-key-inline-actions" style="margin-top:16px;">
+              <button
+                type="submit"
+                class="key-btn key-btn-xs key-btn-primary"
+              >
+                Send / Kirim ke Discord
+              </button>
+            </div>
+          </form>
+        </section>
+
         <!-- ========== DISCORD USERS OVERVIEW (FULL WIDTH) ========== -->
         <section class="card admin-card-user-list">
           <div class="card-header">
