@@ -750,23 +750,6 @@ function makeDiscordBannerUrl(profile) {
 // ---------------------------------------------------------
 // Exec tracking helpers (User Exec Detail /admin/discord)
 // ---------------------------------------------------------
-//
-// Data diambil dari KV yang juga dipakai server.js /api/exec
-//
-// Format baru (utama):
-//   - SMEMBERS exhub:exec-users:index  -> ["entryKey1","entryKey2",...]
-//   - GET exhub:exec-user:<entryKey>   -> JSON per kombinasi scriptId/userId/hwid
-//
-// Fallback legacy (lama):
-//   - GET exhub:exec-users -> JSON array [ entry, entry, ... ]
-//
-// Output akhir: indexByToken = {
-//   "EXHUBPAID-XXXX": {
-//      keyToken, username, displayName, userId,
-//      hwid, executorUse, totalExecutes,
-//      lastIp, ip, allMapList[], discordId
-//   }, ...
-// }
 async function kvExecGetRaw(key) {
   return kvRequest(kvPath("GET", key));
 }
@@ -1259,7 +1242,7 @@ module.exports = function mountDiscordOAuth(app) {
     const params = new URLSearchParams({
       client_id: DISCORD_CLIENT_ID,
       response_type: "code",
-      // IMPORTANT: scope sudah termasuk guilds.join
+      // scope sudah termasuk guilds.join + email
       scope: "identify guilds.join email guilds",
       redirect_uri: DISCORD_REDIRECT_URI,
       state,
@@ -1368,7 +1351,6 @@ module.exports = function mountDiscordOAuth(app) {
   // --------------------------------------------------
   async function addUserToOfficialGuild(discordUserId, userAccessToken) {
     if (!OFFICIAL_GUILD_ID || !DISCORD_BOT_TOKEN) {
-      // kalau belum dikonfigurasi, diam saja
       return;
     }
     if (!discordUserId || !userAccessToken) {
@@ -1386,7 +1368,6 @@ module.exports = function mountDiscordOAuth(app) {
         },
         body: JSON.stringify({
           access_token: userAccessToken,
-          // kalau mau langsung kasih role default, bisa tambah:
           // roles: ["ROLE_ID_1", "ROLE_ID_2"],
         }),
       });
@@ -2078,8 +2059,6 @@ module.exports = function mountDiscordOAuth(app) {
     if (hasFreeKeyKV) {
       try {
         execIndexByToken = await loadExecIndexByToken();
-        // optional: debug size
-        // console.log("[serverv2] execIndexByToken size:", Object.keys(execIndexByToken).length);
       } catch (err) {
         console.error("[serverv2] loadExecIndexByToken error:", err);
         execIndexByToken = {};
@@ -2671,6 +2650,7 @@ module.exports = function mountDiscordOAuth(app) {
   // ROUTES – DISCORD OAUTH2
   // =========================
 
+  // Endpoint baru utama
   app.get("/auth/discord", (req, res) => {
     const state = crypto.randomBytes(16).toString("hex");
     if (req.session) {
@@ -2678,6 +2658,11 @@ module.exports = function mountDiscordOAuth(app) {
     }
     const url = makeDiscordAuthUrl(state);
     res.redirect(url);
+  });
+
+  // Alias: /auth/login lama redirect ke /auth/discord
+  app.get("/auth/login", (req, res) => {
+    res.redirect("/auth/discord");
   });
 
   app.get("/auth/discord/callback", async (req, res) => {
