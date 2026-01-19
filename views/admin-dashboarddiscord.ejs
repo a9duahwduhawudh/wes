@@ -223,6 +223,12 @@
         var defaultLinkvDesc =
           fkLinkv.dashboardDescription ||
           'Complete a short task and get rewarded. Takes less than 2 minutes.';
+
+        // Default channel ID untuk NEW UPDATE SC (jika backend mengirimkan)
+        var defaultUpdateChannelId =
+          (typeof updateChannelId !== 'undefined' && updateChannelId)
+            ? updateChannelId
+            : '';
       %>
 
       <!-- ================= BODY (GLOBAL CONFIG + USER OVERVIEW + DETAIL) ================= -->
@@ -414,9 +420,9 @@
                 Kirim pengumuman <strong>NEW UPDATE SC</strong> langsung ke Discord
                 menggunakan format standar:
                 <code>[SCRIPT]</code>, <code>[STATUS]</code>, <strong>FEATURES</strong>,
-                <strong>CHANGE LOGS</strong>, dan <strong>NEXT UPDATE</strong>.
-                Pesan ini akan dikirim ke channel yang dikonfigurasi di backend
-                (<code>UPDATE_CHANNEL_ID</code> / setelan di <code>serverv2.js</code>).
+                <strong>CHANGE LOGS</strong>, dan <strong>NEXT UPDATE</strong>.<br />
+                Backend akan mengirim embed ke channel yang dikonfigurasi melalui
+                <code>UPDATE_CHANNEL_ID</code> atau Channel ID yang Anda isi di form ini.
               </p>
             </div>
           </div>
@@ -433,20 +439,20 @@
             >
               <!-- KOLUM 1: IDENTITAS SCRIPT -->
               <div>
-                <h3 class="section-title xsmall">Script &amp; Status</h3>
+                <h3 class="section-title xsmall">Script, Status &amp; Channel</h3>
 
                 <div class="admin-key-field" style="margin-top:8px;">
                   <div class="table-sub-text">
                     Nama Script
                     <span class="table-sub-text" style="display:block;">
-                      Contoh: <code>SPEAR FISHING</code>, <code>INDO HANGOUT</code>, dsb.
+                      Contoh: <code>SPEAR FISHING PRO++</code>, <code>INDO HANGOUT</code>, dsb.
                     </span>
                   </div>
                   <input
                     type="text"
                     name="scriptName"
                     class="key-input key-input-sm"
-                    placeholder="SPEAR FISHING"
+                    placeholder="SPEAR FISHING PRO++"
                     required
                     autocomplete="off"
                   />
@@ -456,7 +462,9 @@
                   <div class="table-sub-text">
                     Status Script
                     <span class="table-sub-text" style="display:block;">
-                      Digunakan untuk field <code>[STATUS]</code>.
+                      Nilai ini akan dipetakan oleh bot / backend ke label dan warna embed standar:
+                      <code>[🟢] WORKING / STABLE</code>, <code>[🟡] OUTDATED (BISA DIPAKE)</code>,
+                      <code>❌ NOT WORKING</code>, <code>🛠️ NEED UPDATE</code>, <code>⏳ COMING SOON</code>.
                     </span>
                   </div>
                   <select
@@ -464,10 +472,11 @@
                     class="key-select key-input-sm"
                     required
                   >
-                    <option value="WORKING" selected>WORKING</option>
-                    <option value="ONLINE">ONLINE</option>
-                    <option value="OFFLINE">OFFLINE</option>
-                    <option value="OUTDATED (BISA DIPAKE)">OUTDATED (BISA DIPAKE)</option>
+                    <option value="WORKING" selected>[🟢] WORKING / STABLE</option>
+                    <option value="OUTDATED (BISA DIPAKE)">[🟡] OUTDATED (BISA DIPAKE)</option>
+                    <option value="NOT WORKING">❌ NOT WORKING</option>
+                    <option value="NEED UPDATE">🛠️ NEED UPDATE</option>
+                    <option value="COMING SOON">⏳ COMING SOON</option>
                   </select>
                 </div>
 
@@ -475,7 +484,7 @@
                   <div class="table-sub-text">
                     Next Update (opsional)
                     <span class="table-sub-text" style="display:block;">
-                      Contoh: <code>-</code> atau rencana update berikutnya.
+                      Contoh: <code>-</code> atau rencana update berikutnya (misal: "Tambah Auto Album &amp; ESP Boss").
                     </span>
                   </div>
                   <input
@@ -489,13 +498,32 @@
 
                 <div class="admin-key-field" style="margin-top:10px;">
                   <div class="table-sub-text">
+                    Channel ID (opsional)
+                    <span class="table-sub-text" style="display:block;">
+                      Kosongkan untuk menggunakan <code>UPDATE_CHANNEL_ID</code> dari konfigurasi backend.
+                      <% if (defaultUpdateChannelId) { %>
+                        Saat ini: <code><%= defaultUpdateChannelId %></code>
+                      <% } %>
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    name="channelId"
+                    class="key-input key-input-sm"
+                    placeholder="Contoh: 1459846185757180038"
+                    autocomplete="off"
+                  />
+                </div>
+
+                <div class="admin-key-field" style="margin-top:10px;">
+                  <div class="table-sub-text">
                     Catatan
                   </div>
                   <div class="table-sub-text">
                     Konten final akan diprefix dengan
                     <code>:green_circle: NEW UPDATE SC</code>, mention role
                     (<code>@everyone</code> atau role khusus), dan footer waktu
-                    <strong>WITA</strong>.
+                    <strong>WIB</strong> (format <code>Today DD-MM-YYYY HH:MM WIB</code>).
                   </div>
                 </div>
               </div>
@@ -510,7 +538,7 @@
                     <span class="table-sub-text" style="display:block;">
                       Pisahkan setiap fitur dengan <strong>enter</strong> atau tanda
                       <code>;</code>. Setiap baris akan muncul sebagai
-                      <code>[✅] ...</code>
+                      <code>[✅] ...</code> di embed Discord.
                     </span>
                   </div>
                   <textarea
@@ -529,7 +557,7 @@
                     <span class="table-sub-text" style="display:block;">
                       Pisahkan setiap perubahan dengan <strong>enter</strong> atau tanda
                       <code>;</code>. Setiap baris akan muncul sebagai
-                      <code>[+]</code>.
+                      <code>[+]</code> di embed Discord.
                     </span>
                   </div>
                   <textarea
