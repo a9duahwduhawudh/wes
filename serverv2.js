@@ -1294,8 +1294,10 @@ module.exports = function mountDiscordOAuth(app) {
   // ENV
   // =========================
   const DISCORD_CLIENT_ID =
-    process.env.DISCORD_CLIENT_ID || process.env.CLIENT_ID;
-  const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
+    (process.env.DISCORD_CLIENT_ID || process.env.CLIENT_ID || "").trim() ||
+    null;
+  const DISCORD_CLIENT_SECRET =
+    (process.env.DISCORD_CLIENT_SECRET || "").trim() || null;
   const DISCORD_REDIRECT_URI = resolveDiscordRedirectUri();
 
   const EXHUB_API_BASE = resolveExHubApiBase();
@@ -1314,16 +1316,22 @@ module.exports = function mountDiscordOAuth(app) {
 
   // Guild & Bot token untuk auto-join (guilds.join) dan kirim message
   const OFFICIAL_GUILD_ID =
-    process.env.OFFICIAL_GUILD_ID || process.env.GUILD_ID || null;
+    (process.env.OFFICIAL_GUILD_ID ||
+      process.env.GUILD_ID ||
+      ""
+    ).trim() || null;
   const DISCORD_BOT_TOKEN =
-    process.env.DISCORD_TOKEN || process.env.BOT_TOKEN || null;
+    (process.env.DISCORD_TOKEN || process.env.BOT_TOKEN || "").trim() ||
+    null;
 
   // Channel & role default untuk NEW UPDATE SC
-  const UPDATE_CHANNEL_ID = process.env.UPDATE_CHANNEL_ID || null;
+  const UPDATE_CHANNEL_ID =
+    (process.env.UPDATE_CHANNEL_ID || "").trim() || null;
   const UPDATE_EVERYONE_ROLE_ID =
-    process.env.EVERYONE_ROLE_ID ||
-    process.env.UPDATE_EVERYONE_ROLE_ID ||
-    null;
+    (process.env.EVERYONE_ROLE_ID ||
+      process.env.UPDATE_EVERYONE_ROLE_ID ||
+      ""
+    ).trim() || null;
 
   function isOwnerId(id) {
     return OWNER_IDS.includes(String(id));
@@ -2199,8 +2207,6 @@ module.exports = function mountDiscordOAuth(app) {
     if (hasFreeKeyKV) {
       try {
         execIndexByToken = await loadExecIndexByToken();
-        // optional: debug size
-        // console.log("[serverv2] execIndexByToken size:", Object.keys(execIndexByToken).length);
       } catch (err) {
         console.error("[serverv2] loadExecIndexByToken error:", err);
         execIndexByToken = {};
@@ -2807,7 +2813,7 @@ module.exports = function mountDiscordOAuth(app) {
 
       const channelIdRaw =
         (body.channelId || body.channel || "").trim() || "";
-      const channelId = channelIdRaw || UPDATE_CHANNEL_ID;
+      const channelId = (channelIdRaw || UPDATE_CHANNEL_ID || "").trim();
 
       const redirectTarget = "/admin/discord";
 
@@ -2833,6 +2839,18 @@ module.exports = function mountDiscordOAuth(app) {
         );
       }
 
+      if (!/^\d{5,}$/.test(channelId)) {
+        console.error(
+          "[serverv2] send-update-sc: Channel ID tidak valid:",
+          `"${channelId}"`
+        );
+        return res.redirect(
+          redirectTarget +
+            "?error=" +
+            encodeURIComponent("Channel ID tidak valid.")
+        );
+      }
+
       const mention =
         UPDATE_EVERYONE_ROLE_ID &&
         /^\d{5,}$/.test(String(UPDATE_EVERYONE_ROLE_ID))
@@ -2847,6 +2865,13 @@ module.exports = function mountDiscordOAuth(app) {
         nextUpdate,
         mention,
       });
+
+      console.log(
+        "[serverv2] send-update-sc: channelId=",
+        channelId,
+        "mention=",
+        mention
+      );
 
       try {
         const url = `https://discord.com/api/v10/channels/${channelId}/messages`;
