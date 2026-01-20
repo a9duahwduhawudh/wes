@@ -2625,8 +2625,8 @@ app.get('/admin/login', (req, res) => {
 app.post('/admin/login', (req, res) => {
   const { username, password } = req.body;
 
-  const ADMIN_USER = process.env.ADMIN_USER || 'admin';
-  const ADMIN_PASS = process.env.ADMIN_PASS || 'password';
+  const ADMIN_USER = 'admin';
+  const ADMIN_PASS = 'password';
 
   if (username === ADMIN_USER && password === ADMIN_PASS) {
     req.session.isAdmin = true;
