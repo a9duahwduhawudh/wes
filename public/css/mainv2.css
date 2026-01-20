@@ -1,5 +1,5 @@
 /* =========================================================
-   ExHub Css v2 - mainv2.css
+   noctyra Css v2 - mainv2.css
    ========================================================= */
 
 /* ------------------------------
@@ -68,9 +68,11 @@ body.page-dark {
 body.page-dark::-webkit-scrollbar {
   width: 8px;
 }
+
 body.page-dark::-webkit-scrollbar-track {
   background: transparent;
 }
+
 body.page-dark::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.12);
   border-radius: 999px;
@@ -93,12 +95,10 @@ body.page-dark::-webkit-scrollbar-thumb {
   top: 0;
   z-index: 40;
   backdrop-filter: blur(14px);
-  background: linear-gradient(
-      to bottom,
+  background: linear-gradient(to bottom,
       rgba(5, 7, 17, 0.88),
       rgba(5, 7, 17, 0.6),
-      transparent
-    );
+      transparent);
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 
@@ -300,6 +300,7 @@ body.page-dark::-webkit-scrollbar-thumb {
   cursor: pointer;
   padding: 0 6px;
 }
+
 .btn-link-ghost:hover {
   text-decoration: underline;
 }
@@ -412,6 +413,7 @@ body.page-dark::-webkit-scrollbar-thumb {
   background: rgba(255, 82, 111, 0.08);
   color: #ff94aa;
 }
+
 .key-btn-danger-soft:hover {
   border-color: rgba(255, 82, 111, 0.7);
   background: rgba(255, 82, 111, 0.14);
@@ -571,12 +573,10 @@ body.page-dark::-webkit-scrollbar-thumb {
   height: 64px;
   border-radius: 20px;
   padding: 2px;
-  background: conic-gradient(
-    from 130deg,
-    rgba(123, 255, 58, 0.1),
-    rgba(60, 255, 208, 0.5),
-    rgba(123, 255, 58, 0.1)
-  );
+  background: conic-gradient(from 130deg,
+      rgba(123, 255, 58, 0.1),
+      rgba(60, 255, 208, 0.5),
+      rgba(123, 255, 58, 0.1));
 }
 
 .dash-hero-avatar-img,
@@ -685,6 +685,7 @@ body.page-dark::-webkit-scrollbar-thumb {
   font-size: 0.8rem;
   color: var(--text-muted);
 }
+
 .dash-hero-side-meta span {
   color: var(--accent-alt);
 }
@@ -915,6 +916,7 @@ body.page-dark::-webkit-scrollbar-thumb {
   text-decoration: none;
   font-size: 0.82rem;
 }
+
 .link-ghost:hover {
   text-decoration: underline;
 }
@@ -1097,6 +1099,7 @@ body.page-dark::-webkit-scrollbar-thumb {
   font-weight: 600;
   letter-spacing: 0.01em;
 }
+
 .getkey-title span {
   color: var(--accent);
 }
@@ -1112,6 +1115,7 @@ body.page-dark::-webkit-scrollbar-thumb {
   padding: 0;
   margin: 0;
 }
+
 .getkey-bullets li {
   font-size: 0.86rem;
   color: var(--text-soft);
@@ -1119,6 +1123,7 @@ body.page-dark::-webkit-scrollbar-thumb {
   position: relative;
   padding-left: 18px;
 }
+
 .getkey-bullets li::before {
   content: "•";
   position: absolute;
@@ -1203,6 +1208,7 @@ body.page-dark::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.06);
   overflow: hidden;
 }
+
 .provider-progress-fill {
   position: absolute;
   left: 0;
@@ -1364,6 +1370,7 @@ body.page-dark::-webkit-scrollbar-thumb {
   margin: 0 0 2px;
   font-size: 0.9rem;
 }
+
 .getkey-feature p {
   margin: 0;
   font-size: 0.8rem;
@@ -1378,9 +1385,11 @@ body.page-dark::-webkit-scrollbar-thumb {
   0% {
     transform: translateY(0px);
   }
+
   50% {
     transform: translateY(-2px);
   }
+
   100% {
     transform: translateY(0px);
   }
@@ -1603,9 +1612,11 @@ body.page-dark::-webkit-scrollbar-thumb {
   margin: 0;
   font-size: 1.02rem;
 }
+
 .section-title.small {
   font-size: 0.96rem;
 }
+
 .section-title.xsmall {
   font-size: 0.88rem;
   text-transform: uppercase;
@@ -1618,6 +1629,7 @@ body.page-dark::-webkit-scrollbar-thumb {
   font-size: 0.84rem;
   color: var(--text-muted);
 }
+
 .card-description.small {
   font-size: 0.8rem;
 }
@@ -1723,6 +1735,7 @@ body.page-dark::-webkit-scrollbar-thumb {
   font-size: 0.86rem;
   color: var(--text-muted);
 }
+
 .empty-state.small {
   padding: 12px 8px;
   font-size: 0.82rem;
@@ -1746,10 +1759,12 @@ body.page-dark::-webkit-scrollbar-thumb {
   object-fit: cover;
   border: 1px solid rgba(255, 255, 255, 0.12);
 }
+
 .avatar-img--sm {
   width: 32px;
   height: 32px;
 }
+
 .avatar-img--lg {
   width: 56px;
   height: 56px;
@@ -1765,11 +1780,13 @@ body.page-dark::-webkit-scrollbar-thumb {
   font-weight: 600;
   font-size: 1rem;
 }
+
 .avatar-fallback--sm {
   width: 32px;
   height: 32px;
   font-size: 0.9rem;
 }
+
 .avatar-fallback--lg {
   width: 56px;
   height: 56px;
@@ -1790,11 +1807,9 @@ body.page-dark::-webkit-scrollbar-thumb {
 /* Row highlight saat user terpilih */
 .discord-user-row.key-row-highlight {
   box-shadow: inset 3px 0 0 var(--accent);
-  background: linear-gradient(
-    90deg,
-    rgba(123, 255, 58, 0.12),
-    rgba(123, 255, 58, 0.02)
-  ) !important;
+  background: linear-gradient(90deg,
+      rgba(123, 255, 58, 0.12),
+      rgba(123, 255, 58, 0.02)) !important;
 }
 
 /* Actions column */
@@ -1806,6 +1821,7 @@ body.page-dark::-webkit-scrollbar-thumb {
 .key-cell-actions {
   text-align: right;
 }
+
 .key-cell-actions--vertical {
   display: flex;
   flex-direction: column;
@@ -1820,6 +1836,7 @@ body.page-dark::-webkit-scrollbar-thumb {
   gap: 8px;
   flex-wrap: wrap;
 }
+
 .admin-inline-actions--stack {
   flex-direction: column;
   align-items: flex-end;
@@ -1855,6 +1872,7 @@ body.page-dark::-webkit-scrollbar-thumb {
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
+
 .discord-user-banner-img {
   width: 100%;
   max-height: 140px;
@@ -1864,11 +1882,9 @@ body.page-dark::-webkit-scrollbar-thumb {
 .discord-user-summary {
   padding: 12px 12px 10px;
   border-radius: 16px;
-  background: radial-gradient(
-      circle at 0 0,
+  background: radial-gradient(circle at 0 0,
       rgba(123, 255, 58, 0.12),
-      transparent 60%
-    ),
+      transparent 60%),
     rgba(0, 0, 0, 0.6);
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
@@ -2092,12 +2108,14 @@ body.page-dark::-webkit-scrollbar-thumb {
   color: #b9ffb0;
   cursor: pointer;
 }
+
 .btn-renew[disabled] {
   opacity: 0.4;
   cursor: default;
   background: rgba(255, 255, 255, 0.04);
   border-color: rgba(255, 255, 255, 0.12);
 }
+
 .provider-progress-bar--done .provider-progress-fill {
   width: 100%;
 }

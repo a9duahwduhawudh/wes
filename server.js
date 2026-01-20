@@ -104,7 +104,7 @@ async function kvGetInt(key) {
  */
 async function syncScriptCountersToKV(script) {
   if (!hasKV) return;
-  const baseKey = `exhub:script:${script.id}`;
+  const baseKey = `noctyra:script:${script.id}`;
   try {
     await Promise.all([
       kvSet(`${baseKey}:uses`, String(script.uses || 0)),
@@ -126,28 +126,28 @@ const EXEC_USERS_PATH = path.join(__dirname, 'config', 'exec-users.json');
 
 // direktori & KV key untuk body script (raw Lua/txt)
 const SCRIPTS_RAW_DIR = path.join(__dirname, 'scripts-raw');
-const KV_SCRIPTS_META_KEY = 'exhub:scripts-meta';
-const KV_REDEEMED_KEY = 'exhub:redeemed-keys';
-const KV_DELETED_KEYS_KEY = 'exhub:deleted-keys';
+const KV_SCRIPTS_META_KEY = 'noctyra:scripts-meta';
+const KV_REDEEMED_KEY = 'noctyra:redeemed-keys';
+const KV_DELETED_KEYS_KEY = 'noctyra:deleted-keys';
 // key KV untuk data tracking eksekusi user (format legacy: array besar)
-const KV_EXEC_USERS_KEY = 'exhub:exec-users';
+const KV_EXEC_USERS_KEY = 'noctyra:exec-users';
 // format baru: per-entry + index
-const KV_EXEC_ENTRY_PREFIX = 'exhub:exec-user:'; // exhub:exec-user:<entryKey>
-const KV_EXEC_INDEX_KEY = 'exhub:exec-users:index'; // set berisi entryKey
+const KV_EXEC_ENTRY_PREFIX = 'noctyra:exec-user:'; // noctyra:exec-user:<entryKey>
+const KV_EXEC_INDEX_KEY = 'noctyra:exec-users:index'; // set berisi entryKey
 // prefix KV untuk body script
-const KV_SCRIPT_BODY_PREFIX = 'exhub:script-body:';
+const KV_SCRIPT_BODY_PREFIX = 'noctyra:script-body:';
 
 // file & dir untuk Private Raw Files
 const RAW_FILES_PATH = path.join(__dirname, 'config', 'raw-files.json');
 const RAW_FILES_DIR = path.join(__dirname, 'private-raw');
-const KV_RAW_FILES_META_KEY = 'exhub:raw-files-meta';
-const KV_RAW_BODY_PREFIX = 'exhub:raw-body:';
+const KV_RAW_FILES_META_KEY = 'noctyra:raw-files-meta';
+const KV_RAW_BODY_PREFIX = 'noctyra:raw-body:';
 
 // file & dir untuk konfigurasi site & web-keys (Generate Key)
 const SITE_CONFIG_PATH = path.join(__dirname, 'config', 'site-config.json');
 const WEB_KEYS_PATH = path.join(__dirname, 'config', 'web-keys.json');
-const KV_SITE_CONFIG_KEY = 'exhub:site-config';
-const KV_WEB_KEYS_KEY = 'exhub:web-keys';
+const KV_SITE_CONFIG_KEY = 'noctyra:site-config';
+const KV_WEB_KEYS_KEY = 'noctyra:web-keys';
 
 // Konfigurasi halaman generatekey (Luarmor-style)
 const MAX_KEYS_PER_IP = parseInt(process.env.MAX_KEYS_PER_IP || '10', 10);
@@ -492,8 +492,8 @@ async function saveDeletedKeys(list) {
 // helper utama untuk exec-users (tracking user/player)
 /**
  * Format baru (KV):
- * - Index: SADD exhub:exec-users:index <entryKey>
- * - Entry: SET exhub:exec-user:<entryKey> "<json>"
+ * - Index: SADD noctyra:exec-users:index <entryKey>
+ * - Entry: SET noctyra:exec-user:<entryKey> "<json>"
  * Di local dev / tanpa KV tetap pakai file exec-users.json (array).
  */
 async function loadExecUsers() {
@@ -685,7 +685,7 @@ async function saveWebKeys(list) {
 
 /**
  * Ambil body script:
- * 1) Dari KV (exhub:script-body:<id>)
+ * 1) Dari KV (noctyra:script-body:<id>)
  * 2) Fallback file dev lokal (scripts-raw/<id>.lua)
  * 3) Fallback legacy file di /scripts sesuai scriptFile
  */
@@ -1216,7 +1216,7 @@ async function hydrateScriptsWithKV(scripts) {
 
   await Promise.all(
     scripts.map(async (s) => {
-      const baseKey = `exhub:script:${s.id}`;
+      const baseKey = `noctyra:script:${s.id}`;
       s.uses = await kvGetInt(`${baseKey}:uses`);
       s.users = await kvGetInt(`${baseKey}:users`);
     })
@@ -1239,7 +1239,7 @@ async function loadScriptsHydrated() {
 async function incrementCountersKV(script, req) {
   if (!hasKV) return;
 
-  const baseKey = `exhub:script:${script.id}`;
+  const baseKey = `noctyra:script:${script.id}`;
   const usesKey = `${baseKey}:uses`;
   const ipSetKey = `${baseKey}:ips`;
   const usersKey = `${baseKey}:users`;
@@ -1459,7 +1459,7 @@ app.get('/generatekey/ads-start', async (req, res) => {
     console.error('Failed to handle /generatekey/ads-start:', err);
     const parts = [
       'errorMessage=' +
-        encodeURIComponent('Failed to start ads step. Please try again.')
+      encodeURIComponent('Failed to start ads step. Please try again.')
     ];
     const uid = (req.query.userId || '').trim();
     if (uid) parts.push('userId=' + encodeURIComponent(uid));
@@ -1569,9 +1569,9 @@ app.get('/generatekey', async (req, res) => {
         if (!checkpointValid) {
           const params = [
             'errorMessage=' +
-              encodeURIComponent(
-                'Checkpoint expired or invalid. Please click Start again from ExHub page.'
-              )
+            encodeURIComponent(
+              'Checkpoint expired or invalid. Please click Start again from noctyra page.'
+            )
           ];
           if (currentUserId) {
             params.push('userId=' + encodeURIComponent(currentUserId));
@@ -1602,7 +1602,7 @@ app.get('/generatekey', async (req, res) => {
     }
 
     return res.render('generatekey', {
-      title: 'ExHub - Generate Key',
+      title: 'noctyra - Generate Key',
       keys: myKeys,
       maxKeys: maxKeysPerIp,
       adsUrl: adsStartUrl, // penting: sekarang ke /generatekey/ads-start
@@ -1635,7 +1635,7 @@ app.get('/generatekey', async (req, res) => {
     }
 
     return res.status(500).render('generatekey', {
-      title: 'ExHub - Generate Key',
+      title: 'noctyra - Generate Key',
       keys: [],
       maxKeys,
       adsUrl: '/generatekey/ads-start',
@@ -1674,7 +1674,7 @@ app.post('/getkey/new', async (req, res) => {
       const parts = [];
       parts.push(
         'errorMessage=' +
-          encodeURIComponent('Complete the Start / ads step first.')
+        encodeURIComponent('Complete the Start / ads step first.')
       );
       if (currentUserId) {
         parts.push('userId=' + encodeURIComponent(currentUserId));
@@ -1798,7 +1798,7 @@ app.post('/getkey/renew', async (req, res) => {
     if (REQUIRE_ADS_CHECKPOINT && !req.session.generateKeyAdsOk) {
       backParams.push(
         'errorMessage=' +
-          encodeURIComponent('Complete the Start / ads step first.')
+        encodeURIComponent('Complete the Start / ads step first.')
       );
       const qs = backParams.length ? '?' + backParams.join('&') : '';
       return res.redirect('/generatekey' + qs);
@@ -1832,7 +1832,7 @@ app.post('/getkey/renew', async (req, res) => {
     if (!changed) {
       backParams.push(
         'errorMessage=' +
-          encodeURIComponent('Key not found or cannot be renewed.')
+        encodeURIComponent('Key not found or cannot be renewed.')
       );
       const qs = backParams.length ? '?' + backParams.join('&') : '';
       return res.redirect('/generatekey' + qs);
@@ -1869,14 +1869,14 @@ app.get('/get-key', (req, res) => {
 // Backend Redeem Key
 app.post('/get-key/redeem', async (req, res) => {
   const rawKey = (req.body.key || '').trim().toUpperCase();
-  const keyPattern = /^EXHUB-[A-Z0-9]{3}-[A-Z0-9]{3}-[A-Z0-9]{3}$/;
+  const keyPattern = /^noctyra-[A-Z0-9]{3}-[A-Z0-9]{3}-[A-Z0-9]{3}$/;
 
   let status = 'error';
   let message = '';
   if (!rawKey) {
     message = 'Key tidak boleh kosong.';
   } else if (!keyPattern.test(rawKey)) {
-    message = 'Format key tidak valid. Gunakan format EXHUB-XXX-XXX-XXX.';
+    message = 'Format key tidak valid. Gunakan format noctyra-XXX-XXX-XXX.';
   } else {
     const redeemedList = await loadRedeemedKeys();
     const existing = redeemedList.find((k) => k.key === rawKey);
@@ -1896,7 +1896,7 @@ app.post('/get-key/redeem', async (req, res) => {
       await saveRedeemedKeys(redeemedList);
 
       status = 'success';
-      message = 'Key berhasil diredeem. Terima kasih telah menggunakan ExHub.';
+      message = 'Key berhasil diredeem. Terima kasih telah menggunakan noctyra.';
     }
   }
 
@@ -1914,7 +1914,7 @@ app.get('/api/script/:id', async (req, res) => {
   const script = scripts.find((s) => s.id === req.params.id);
 
   // snippet loader yang akan ditampilkan di api-404.ejs
-  const loaderSnippet = `loadstring(game:HttpGet("https://exc-webs.vercel.app/api/script/${req.params.id}", true))()`;
+  const loaderSnippet = `loadstring(game:HttpGet("https://wes-silk.vercel.app/api/script/${req.params.id}", true))()`;
 
   // Script tidak terdaftar
   if (!script) {
@@ -2625,8 +2625,8 @@ app.get('/admin/login', (req, res) => {
 app.post('/admin/login', (req, res) => {
   const { username, password } = req.body;
 
-  const ADMIN_USER = 'admin';
-  const ADMIN_PASS = 'password';
+  const ADMIN_USER = process.env.ADMIN_USER || 'admin';
+  const ADMIN_PASS = process.env.ADMIN_PASS || 'password';
 
   if (username === ADMIN_USER && password === ADMIN_PASS) {
     req.session.isAdmin = true;
@@ -3668,7 +3668,7 @@ async function buildBotUserInfoPayload(discordId, discordTag) {
   if (!relatedExec.length && !uniqueKeys.length) {
     return {
       success: false,
-      message: 'No ExHub data linked for this ID.',
+      message: 'No noctyra data linked for this ID.',
       discordId: id,
       discordTag: tag,
       userTier: null,
@@ -3787,7 +3787,7 @@ app.use(async (req, res) => {
 // Jika dijalankan langsung: `node server.js` (lokal)
 if (require.main === module) {
   app.listen(PORT, () => {
-    console.log(`ExHub site running on http://localhost:${PORT}`);
+    console.log(`noctyra site running on http://localhost:${PORT}`);
   });
 }
 

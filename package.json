@@ -1,7 +1,7 @@
 {
-  "name": "exhub-site",
+  "name": "noctyra-site",
   "version": "1.0.0",
-  "description": "Landing page + scripts + admin panel + loader API for ExHub",
+  "description": "Landing page + scripts + admin panel + loader API for noctyra",
   "main": "server.js",
   "scripts": {
     "dev": "nodemon server.js",

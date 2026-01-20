@@ -1,4 +1,4 @@
-exhub-site/
+noctyra-site/
 │  package.json
 │  server.js
 │  vercel.json

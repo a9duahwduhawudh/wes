@@ -1,16 +1,16 @@
 // serverv2.js
-// Modul fitur: Discord OAuth Login + Dashboard ExHub + Get Free Key + Paid Key API
+// Modul fitur: Discord OAuth Login + Dashboard noctyra + Get Free Key + Paid Key API
 // DIPANGGIL dari server.js utama dengan: require("./serverv2")(app);
 
 const crypto = require("crypto");
 
 // ---------------------------------------------------------
-// Helper: base API ExHub (saat ini tidak lagi dipakai user-info HTTP)
+// Helper: base API noctyra (saat ini tidak lagi dipakai user-info HTTP)
 // ---------------------------------------------------------
-function resolveExHubApiBase() {
+function resolveNoctyraApiBase() {
   const SITE_BASE =
-    process.env.EXHUB_SITE_BASE || "https://exc-webs.vercel.app";
-  let base = process.env.EXHUB_API_BASE;
+    process.env.NOCTYRA_SITE_BASE || "https://wes-silk.vercel.app";
+  let base = process.env.NOCTYRA_API_BASE;
   if (!base) {
     base = new URL("/api/", SITE_BASE).toString();
   }
@@ -27,7 +27,7 @@ function resolveDiscordRedirectUri() {
   }
 
   const SITE_BASE =
-    process.env.EXHUB_SITE_BASE || "https://exc-webs.vercel.app";
+    process.env.NOCTYRA_SITE_BASE || "https://wes-silk.vercel.app";
   const cleanBase = SITE_BASE.replace(/\/+$/, "");
 
   if (process.env.NODE_ENV === "production") {
@@ -45,17 +45,17 @@ const KV_REST_API_TOKEN = process.env.KV_REST_API_TOKEN;
 const hasFreeKeyKV = !!(KV_REST_API_URL && KV_REST_API_TOKEN);
 
 // Index semua user Discord yang pernah login
-const DISCORD_USER_INDEX_KEY = "exhub:discord:userindex";
+const DISCORD_USER_INDEX_KEY = "noctyra:discord:userindex";
 
 // Snapshot agregat eksekusi loader (per key/per Discord) – harus sama dengan server.js /api/exec
 // Format utama (baru):
-//   - SMEMBERS exhub:exec-users:index  -> daftar entryKey
-//   - GET exhub:exec-user:<entryKey>   -> JSON per kombinasi scriptId/userId/hwid
+//   - SMEMBERS noctyra:exec-users:index  -> daftar entryKey
+//   - GET noctyra:exec-user:<entryKey>   -> JSON per kombinasi scriptId/userId/hwid
 // Fallback legacy (lama):
-//   - GET exhub:exec-users             -> array entries
-const EXEC_USER_ENTRY_PREFIX = "exhub:exec-user:";
-const EXEC_USERS_INDEX_KEY = "exhub:exec-users:index";
-const EXEC_USERS_KEY = "exhub:exec-users";
+//   - GET noctyra:exec-users             -> array entries
+const EXEC_USER_ENTRY_PREFIX = "noctyra:exec-user:";
+const EXEC_USERS_INDEX_KEY = "noctyra:exec-users:index";
+const EXEC_USERS_KEY = "noctyra:exec-users";
 
 // ---------------------------------------------------------
 // Helper KV umum
@@ -290,14 +290,14 @@ function buildScriptUpdateEmbedPayload(options) {
 
   const description = lines.join("\n");
 
-  const footerText = `ExHub | ${formatDateTimeWIBSimple()}`;
+  const footerText = `noctyra | ${formatDateTimeWIBSimple()}`;
 
   const embed = {
     description,
     color: 0x2b2d31,
     footer: {
       text: footerText,
-      icon_url: "https://exc-webs.vercel.app/img/ExLogo2.png",
+      icon_url: "https://wes-silk.vercel.app/img/ExLogo2.png",
     },
   };
 
@@ -316,8 +316,8 @@ function buildScriptUpdateEmbedPayload(options) {
 // Global config (UI Get Free Key + TTL free & paid) via KV
 // ---------------------------------------------------------
 
-const FREE_KEY_UI_CONFIG_KEY = "exhub:freekey:ui-config";
-const PAID_PLAN_CONFIG_KEY = "exhub:paidplan:config";
+const FREE_KEY_UI_CONFIG_KEY = "noctyra:freekey:ui-config";
+const PAID_PLAN_CONFIG_KEY = "noctyra:paidplan:config";
 
 const FREE_KEY_TTL_DEFAULT_HOURS = Number(
   process.env.FREE_KEY_TTL_HOURS || 3
@@ -443,7 +443,7 @@ async function getPaidDurationsMs() {
 // Konfigurasi Free Key (persisten via Upstash)
 // ---------------------------------------------------------
 
-const FREE_KEY_PREFIX = "EXHUBFREE";
+const FREE_KEY_PREFIX = "noctyraFREE";
 const FREE_KEY_TTL_HOURS = FREE_KEY_TTL_DEFAULT_HOURS;
 const FREE_KEY_MAX_PER_USER = 5;
 
@@ -455,15 +455,15 @@ const FREEKEY_ADS_COOLDOWN_MS = Number(
 );
 
 function userIndexKey(userId) {
-  return `exhub:freekey:user:${userId}`;
+  return `noctyra:freekey:user:${userId}`;
 }
 
 function tokenKey(token) {
-  return `exhub:freekey:token:${token}`;
+  return `noctyra:freekey:token:${token}`;
 }
 
 function discordUserProfileKey(discordId) {
-  return `exhub:discord:userprofile:${discordId}`;
+  return `noctyra:discord:userprofile:${discordId}`;
 }
 
 function discordUserIndexKey() {
@@ -489,7 +489,7 @@ async function createFreeKeyRecordPersistent({ userId, provider, ip }) {
   const expiresAfter = createdAt + ttlMs;
 
   let token;
-  for (;;) {
+  for (; ;) {
     token = generateFreeKeyToken();
     const existing = await kvGetJson(tokenKey(token));
     if (!existing) break;
@@ -589,7 +589,7 @@ async function getFreeKeysForUserPersistent(userId) {
 
     const timeLeftLabel = formatTimeLeftLabelFromMs(rec.expiresAfter);
 
-    let providerLabel = rec.provider || "ExHub Free";
+    let providerLabel = rec.provider || "noctyra Free";
     const p = String(providerLabel).toLowerCase();
     if (p === "workink" || p === "work.ink") providerLabel = "Work.ink";
     else if (p.indexOf("linkvertise") !== -1) providerLabel = "Linkvertise";
@@ -618,14 +618,14 @@ async function getFreeKeysForUserPersistent(userId) {
 // Konfigurasi Paid Key (Premium Keys) via KV
 // ---------------------------------------------------------
 
-const PAID_KEY_PREFIX = "EXHUBPAID";
+const PAID_KEY_PREFIX = "noctyraPAID";
 
 function paidTokenKey(token) {
-  return `exhub:paidkey:token:${token}`;
+  return `noctyra:paidkey:token:${token}`;
 }
 
 function paidUserIndexKey(discordId) {
-  return `exhub:paidkey:user:${discordId}`;
+  return `noctyra:paidkey:user:${discordId}`;
 }
 
 function normalizePaidKeyRecord(raw) {
@@ -672,21 +672,21 @@ async function setPaidKeyRecord(payload) {
       typeof payload.expiresAfter === "number"
         ? payload.expiresAfter
         : existing && typeof existing.expiresAfter === "number"
-        ? existing.expiresAfter
-        : 0,
+          ? existing.expiresAfter
+          : 0,
     type: payload.type || (existing && existing.type) || null,
     valid:
       typeof payload.valid === "boolean"
         ? !!payload.valid
         : existing
-        ? !!existing.valid
-        : false,
+          ? !!existing.valid
+          : false,
     deleted:
       typeof payload.deleted === "boolean"
         ? !!payload.deleted
         : existing
-        ? !!existing.deleted
-        : false,
+          ? !!existing.deleted
+          : false,
     ownerDiscordId: ownerDiscordId || previousOwnerId || null,
   };
 
@@ -742,7 +742,7 @@ async function getPaidKeysForUserPersistent(discordId) {
       continue;
     }
 
-    let providerLabel = "ExHub Paid";
+    let providerLabel = "noctyra Paid";
     const t = (rec.type || "").toString().toLowerCase();
     if (t === "month") providerLabel = "PAID MONTH";
     else if (t === "lifetime") providerLabel = "PAID LIFETIME";
@@ -868,14 +868,14 @@ function makeDiscordBannerUrl(profile) {
 // Data diambil dari KV yang juga dipakai server.js /api/exec
 //
 // Format baru (utama):
-//   - SMEMBERS exhub:exec-users:index  -> ["entryKey1","entryKey2",...]
-//   - GET exhub:exec-user:<entryKey>   -> JSON per kombinasi scriptId/userId/hwid
+//   - SMEMBERS noctyra:exec-users:index  -> ["entryKey1","entryKey2",...]
+//   - GET noctyra:exec-user:<entryKey>   -> JSON per kombinasi scriptId/userId/hwid
 //
 // Fallback legacy (lama):
-//   - GET exhub:exec-users -> JSON array [ entry, entry, ... ]
+//   - GET noctyra:exec-users -> JSON array [ entry, entry, ... ]
 //
 // Output akhir: indexByToken = {
-//   "EXHUBPAID-XXXX": {
+//   "noctyraPAID-XXXX": {
 //      keyToken, username, displayName, userId,
 //      hwid, executorUse, totalExecutes,
 //      lastIp, ip, allMapList[], discordId
@@ -1084,7 +1084,7 @@ async function loadExecIndexByToken() {
     );
   }
 
-  // Fallback legacy: exhub:exec-users (array)
+  // Fallback legacy: noctyra:exec-users (array)
   if (Object.keys(index).length === 0) {
     try {
       const rawLegacy = await kvExecGetRaw(EXEC_USERS_KEY);
@@ -1129,8 +1129,8 @@ function normalizePaidKeyForAdmin(k, fallbackDiscordId) {
     typeof k.expiresAfter === "number" && k.expiresAfter > 0
       ? k.expiresAfter
       : typeof k.expiresAtMs === "number" && k.expiresAtMs > 0
-      ? k.expiresAtMs
-      : null;
+        ? k.expiresAtMs
+        : null;
 
   const createdLabelObj = createdAtMs
     ? formatDualTimeLabelMs(createdAtMs)
@@ -1144,8 +1144,8 @@ function normalizePaidKeyForAdmin(k, fallbackDiscordId) {
     typeof k.expired === "boolean"
       ? k.expired
       : expiresAtMs
-      ? nowMs() > expiresAtMs
-      : false;
+        ? nowMs() > expiresAtMs
+        : false;
   const valid =
     typeof k.valid === "boolean"
       ? k.valid
@@ -1165,7 +1165,7 @@ function normalizePaidKeyForAdmin(k, fallbackDiscordId) {
     ? formatTimeLeftLabelFromMs(expiresAtMs)
     : "-";
 
-  const provider = k.provider || "ExHub Paid";
+  const provider = k.provider || "noctyra Paid";
 
   return {
     token,
@@ -1208,8 +1208,8 @@ function normalizeFreeKeyForAdmin(fk, discordId) {
       : statusStr === "expired";
   const valid = statusStr === "active" && !expired;
 
-  const providerLabel = String(fk.provider || "ExHub Free").toLowerCase();
-  let provider = "ExHub Free";
+  const providerLabel = String(fk.provider || "noctyra Free").toLowerCase();
+  let provider = "noctyra Free";
   if (providerLabel === "work.ink" || providerLabel === "workink") {
     provider = "Work.ink";
   } else if (providerLabel.indexOf("linkvertise") !== -1) {
@@ -1223,8 +1223,8 @@ function normalizeFreeKeyForAdmin(fk, discordId) {
   const status = expired
     ? "Expired"
     : valid
-    ? "Active"
-    : fk.status || "Pending";
+      ? "Active"
+      : fk.status || "Pending";
 
   return {
     token,
@@ -1300,10 +1300,10 @@ module.exports = function mountDiscordOAuth(app) {
     (process.env.DISCORD_CLIENT_SECRET || "").trim() || null;
   const DISCORD_REDIRECT_URI = resolveDiscordRedirectUri();
 
-  const EXHUB_API_BASE = resolveExHubApiBase();
+  const NOCTYRA_API_BASE = resolvenoctyraApiBase();
 
   const WORKINK_ADS_URL =
-    process.env.WORKINK_ADS_URL || "https://work.ink/23P2/exhubfreekey";
+    process.env.WORKINK_ADS_URL || "https://work.ink/23P2/noctyrafreekey";
   const LINKVERTISE_ADS_URL =
     process.env.LINKVERTISE_ADS_URL ||
     "https://link-target.net/2995260/uaE3u7P8CG5D";
@@ -1340,7 +1340,7 @@ module.exports = function mountDiscordOAuth(app) {
   if (!DISCORD_CLIENT_ID || !DISCORD_CLIENT_SECRET) {
     console.warn(
       "[serverv2] DISCORD_CLIENT_ID atau DISCORD_CLIENT_SECRET belum diset. " +
-        "Fitur Discord Login tidak akan bekerja dengan benar."
+      "Fitur Discord Login tidak akan bekerja dengan benar."
     );
   } else {
     console.log(
@@ -1467,7 +1467,7 @@ module.exports = function mountDiscordOAuth(app) {
     const normalizedFree = freeKeys.map((fk) => ({
       key: fk.token,
       token: fk.token,
-      provider: fk.provider || "ExHub Free",
+      provider: fk.provider || "noctyra Free",
       timeLeft: fk.timeLeftLabel || "-",
       status: fk.status || "Active",
       tier: fk.tier || "Free",
@@ -1637,7 +1637,7 @@ module.exports = function mountDiscordOAuth(app) {
     const errorMessage = req.query.error || null;
 
     res.render("getfreekey", {
-      title: "ExHub — Get Free Key",
+      title: "noctyra — Get Free Key",
       user: discordUser,
       adsProvider,
       adsUrl,
@@ -1676,10 +1676,10 @@ module.exports = function mountDiscordOAuth(app) {
     if (bannedFlag) {
       return res.redirect(
         redirectBase +
-          "&error=" +
-          encodeURIComponent(
-            "Akun ini telah diblokir. Free key tidak tersedia."
-          )
+        "&error=" +
+        encodeURIComponent(
+          "Akun ini telah diblokir. Free key tidak tersedia."
+        )
       );
     }
 
@@ -1688,10 +1688,10 @@ module.exports = function mountDiscordOAuth(app) {
       if (existing.length >= FREE_KEY_MAX_PER_USER) {
         return res.redirect(
           redirectBase +
-            "&error=" +
-            encodeURIComponent(
-              "Key slot penuh. Biarkan beberapa key expired dulu."
-            )
+          "&error=" +
+          encodeURIComponent(
+            "Key slot penuh. Biarkan beberapa key expired dulu."
+          )
         );
       }
 
@@ -1700,10 +1700,10 @@ module.exports = function mountDiscordOAuth(app) {
         if (!adsState || adsState.used) {
           return res.redirect(
             redirectBase +
-              "&error=" +
-              encodeURIComponent(
-                "Selesaikan iklan terlebih dahulu sebelum generate key."
-              )
+            "&error=" +
+            encodeURIComponent(
+              "Selesaikan iklan terlebih dahulu sebelum generate key."
+            )
           );
         }
       }
@@ -1723,8 +1723,8 @@ module.exports = function mountDiscordOAuth(app) {
       console.error("[serverv2] generate free key error:", err);
       return res.redirect(
         redirectBase +
-          "&error=" +
-          encodeURIComponent("Failed to generate key.")
+        "&error=" +
+        encodeURIComponent("Failed to generate key.")
       );
     }
   });
@@ -1744,8 +1744,8 @@ module.exports = function mountDiscordOAuth(app) {
     if (!token) {
       return res.redirect(
         redirectBase +
-          "&error=" +
-          encodeURIComponent("Token tidak ditemukan.")
+        "&error=" +
+        encodeURIComponent("Token tidak ditemukan.")
       );
     }
 
@@ -1753,10 +1753,10 @@ module.exports = function mountDiscordOAuth(app) {
     if (bannedFlag) {
       return res.redirect(
         redirectBase +
-          "&error=" +
-          encodeURIComponent(
-            "Akun ini telah diblokir. Free key tidak dapat diperpanjang."
-          )
+        "&error=" +
+        encodeURIComponent(
+          "Akun ini telah diblokir. Free key tidak dapat diperpanjang."
+        )
       );
     }
 
@@ -1765,8 +1765,8 @@ module.exports = function mountDiscordOAuth(app) {
       if (!rec || String(rec.userId) !== String(userId)) {
         return res.redirect(
           redirectBase +
-            "&error=" +
-            encodeURIComponent("Key tidak valid untuk akun ini.")
+          "&error=" +
+          encodeURIComponent("Key tidak valid untuk akun ini.")
         );
       }
 
@@ -1775,10 +1775,10 @@ module.exports = function mountDiscordOAuth(app) {
         if (!adsState || adsState.used) {
           return res.redirect(
             redirectBase +
-              "&error=" +
-              encodeURIComponent(
-                "Selesaikan iklan terlebih dahulu sebelum renew key."
-              )
+            "&error=" +
+            encodeURIComponent(
+              "Selesaikan iklan terlebih dahulu sebelum renew key."
+            )
           );
         }
       }
@@ -1791,8 +1791,8 @@ module.exports = function mountDiscordOAuth(app) {
       console.error("[serverv2] extend free key error:", err);
       return res.redirect(
         redirectBase +
-          "&error=" +
-          encodeURIComponent("Failed to renew key.")
+        "&error=" +
+        encodeURIComponent("Failed to renew key.")
       );
     }
   });
@@ -2035,7 +2035,7 @@ module.exports = function mountDiscordOAuth(app) {
         const token = String(k.token || k.key || "");
         if (!token) return null;
 
-        const provider = k.provider || "exhub-paid";
+        const provider = k.provider || "noctyra-paid";
         const typeRaw = (k.type || "").toString().toLowerCase();
         const type =
           typeRaw === "month" || typeRaw === "lifetime"
@@ -2056,14 +2056,14 @@ module.exports = function mountDiscordOAuth(app) {
           typeof k.expiresAfter === "number"
             ? k.expiresAfter
             : typeof k.expiresAtMs === "number"
-            ? k.expiresAtMs
-            : null;
+              ? k.expiresAtMs
+              : null;
         const expired =
           typeof k.expired === "boolean"
             ? k.expired
             : expiresAfter
-            ? now > expiresAfter
-            : false;
+              ? now > expiresAfter
+              : false;
 
         return {
           token,
@@ -2089,8 +2089,8 @@ module.exports = function mountDiscordOAuth(app) {
       const expiresAfter =
         typeof fk.expiresAfter === "number" ? fk.expiresAfter : null;
 
-      const providerLabel = String(fk.provider || "ExHub Free").toLowerCase();
-      let provider = "exhub-free";
+      const providerLabel = String(fk.provider || "noctyra Free").toLowerCase();
+      let provider = "noctyra-free";
       if (providerLabel === "work.ink" || providerLabel === "workink") {
         provider = "work.ink";
       } else if (providerLabel.indexOf("linkvertise") !== -1) {
@@ -2136,7 +2136,7 @@ module.exports = function mountDiscordOAuth(app) {
 
     const banned =
       (profile && profile.banned === true) ||
-      (typeof body.banned === "boolean" && body.banned === true)
+        (typeof body.banned === "boolean" && body.banned === true)
         ? true
         : false;
 
@@ -2823,8 +2823,8 @@ module.exports = function mountDiscordOAuth(app) {
         );
         return res.redirect(
           redirectTarget +
-            "?error=" +
-            encodeURIComponent("Bot token belum dikonfigurasi.")
+          "?error=" +
+          encodeURIComponent("Bot token belum dikonfigurasi.")
         );
       }
 
@@ -2834,8 +2834,8 @@ module.exports = function mountDiscordOAuth(app) {
         );
         return res.redirect(
           redirectTarget +
-            "?error=" +
-            encodeURIComponent("Channel tujuan belum dikonfigurasi.")
+          "?error=" +
+          encodeURIComponent("Channel tujuan belum dikonfigurasi.")
         );
       }
 
@@ -2846,14 +2846,14 @@ module.exports = function mountDiscordOAuth(app) {
         );
         return res.redirect(
           redirectTarget +
-            "?error=" +
-            encodeURIComponent("Channel ID tidak valid.")
+          "?error=" +
+          encodeURIComponent("Channel ID tidak valid.")
         );
       }
 
       const mention =
         UPDATE_EVERYONE_ROLE_ID &&
-        /^\d{5,}$/.test(String(UPDATE_EVERYONE_ROLE_ID))
+          /^\d{5,}$/.test(String(UPDATE_EVERYONE_ROLE_ID))
           ? `<@&${UPDATE_EVERYONE_ROLE_ID}>`
           : "@everyone";
 
@@ -2893,8 +2893,8 @@ module.exports = function mountDiscordOAuth(app) {
           );
           return res.redirect(
             redirectTarget +
-              "?error=" +
-              encodeURIComponent("Gagal mengirim pesan ke Discord.")
+            "?error=" +
+            encodeURIComponent("Gagal mengirim pesan ke Discord.")
           );
         }
 
@@ -2905,15 +2905,15 @@ module.exports = function mountDiscordOAuth(app) {
 
         return res.redirect(
           redirectTarget +
-            "?sent=1&script=" +
-            encodeURIComponent(scriptName)
+          "?sent=1&script=" +
+          encodeURIComponent(scriptName)
         );
       } catch (err) {
         console.error("[serverv2] send-update-sc: error fetch Discord:", err);
         return res.redirect(
           redirectTarget +
-            "?error=" +
-            encodeURIComponent("Internal error saat kirim ke Discord.")
+          "?error=" +
+          encodeURIComponent("Internal error saat kirim ke Discord.")
         );
       }
     }
